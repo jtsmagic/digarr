@@ -513,7 +513,7 @@ export default function History() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: isDone ? 'var(--green)' : isError ? 'var(--red)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {isDone
-                        ? `✓ ${added} added${errors > 0 ? `, ${errors} failed` : ''}${job.plex_result ? ` · ${job.plex_result.matched}/${job.plex_result.total} in Plex` : ''}`
+                        ? `✓ ${added} artist${added !== 1 ? 's' : ''} added to Lidarr${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · ${job.plex_result.matched}/${job.plex_result.total} tracks in Plex` : ''}`
                         : isError ? `Error: ${job.error}`
                         : job.status === 'queued' ? 'Queued…'
                         : `${job.current}/${job.total}${job.current_artist ? `: ${job.current_artist}` : ''}`}
@@ -556,7 +556,7 @@ export default function History() {
             const sync = syncStates[pl.id] || {};
             const refresh = refreshStates[pl.id] || {};
             const spotifyPush = spotifyPushStates[pl.id] || {};
-            const canRefresh = pl.source_url && (pl.source_type === 'url' || pl.source_type === 'm3u_url');
+            const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs', 'spotify'].includes(pl.source_type);
             const activeJob = importJobs.find(j => j.playlist_id === pl.id && (j.status === 'queued' || j.status === 'running'));
             return (
               <div key={pl.id} className="card">
@@ -627,7 +627,7 @@ export default function History() {
                         <span className="spinner" style={{ width: 8, height: 8 }} /> Importing…
                       </span>
                     ) : (
-                      <span className="badge badge-added">{pl.artists_added?.length || 0} added</span>
+                      <span className="badge badge-added">{pl.artists_added?.length || 0} in Lidarr</span>
                     )}
                     {pl.plex_playlist_id && (
                       <span className="badge" style={{ background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'default' }}
@@ -635,7 +635,7 @@ export default function History() {
                           ? `${pl.plex_matched_count} of ${pl.plex_total_count} tracks matched in Plex`
                           : 'Playlist exists in Plex'}>
                         {pl.plex_matched_count != null
-                          ? `Plex ${pl.plex_matched_count}/${pl.plex_total_count}`
+                          ? `Plex: ${pl.plex_matched_count}/${pl.plex_total_count} tracks`
                           : 'In Plex'}
                       </span>
                     )}
