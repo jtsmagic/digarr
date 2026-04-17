@@ -6,11 +6,18 @@ from typing import Optional, List, Literal
 import uvicorn
 import asyncio
 import io
+import logging
 import os
 import re
 import traceback
 import uuid
 from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -67,7 +74,10 @@ from auth import (
     get_user_info,
 )
 from config import load_config, save_config
-from database import db_prune_expired_sessions, save_oauth_state, consume_oauth_state
+from database import (
+    db_prune_expired_sessions, save_oauth_state, consume_oauth_state,
+    db_save_import_job, db_load_recent_import_jobs, db_prune_import_jobs,
+)
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from parsers.m3u import parse_m3u_content
@@ -95,7 +105,6 @@ def _real_ip(request: Request) -> str:
 limiter = Limiter(key_func=_real_ip)
 app = FastAPI(title="Digarr", version="1.0.0")
 
-# In-memory import job store — ephemeral, no persistence needed
 _jobs: dict = {}
 _MAX_COMPLETED_JOBS = 30
 app.state.limiter = limiter
@@ -107,7 +116,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     from fastapi import HTTPException
     if isinstance(exc, HTTPException):
         raise exc
-    print(f"Unhandled exception on {request.method} {request.url.path}:\n{traceback.format_exc()}")
+    logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=True)
     return JSONResponse({"detail": "An unexpected error occurred."}, status_code=500)
 
 
@@ -125,7 +134,7 @@ async def _send_webhook(url: str, payload: dict) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(url, json=payload)
     except Exception as exc:
-        print(f"Webhook delivery failed: {exc}")
+        logger.warning("Webhook delivery failed: %s", exc)
 
 
 def make_lidarr_client(config: dict) -> LidarrClient:
@@ -177,6 +186,13 @@ async def auth_middleware(request: Request, call_next):
 async def startup():
     init_db()
     db_prune_expired_sessions()
+    # Recover persisted jobs; any that were mid-flight when the container stopped get marked error
+    for job in db_load_recent_import_jobs():
+        if job["status"] in ("running", "queued"):
+            job["status"] = "error"
+            job["error"] = "Interrupted by restart"
+            db_save_import_job(job)
+        _jobs[job["id"]] = job
     config = load_config()
     _reschedule(int(config.get("refresh_interval_hours") or 0))
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
@@ -489,7 +505,7 @@ def _reschedule_plex_sync(hours: int):
         )
 
 async def _refresh_all_playlists_job() -> dict:
-    print(f"Scheduler: starting scheduled refresh — {datetime.utcnow().isoformat()}")
+    logger.info("Scheduler: starting scheduled refresh")
     config = load_config()
     playlists = get_playlists()
     excluded = set(config.get("refresh_excluded_playlist_ids") or [])
@@ -509,27 +525,27 @@ async def _refresh_all_playlists_job() -> dict:
                 "total_tracks": result["total_tracks"],
                 "status": "ok",
             })
-            print(f"Scheduler: refreshed '{pl['name']}' — {result['new_artists_added']} new artists")
+            logger.info("Scheduler: refreshed '%s' — %s new artists", pl['name'], result['new_artists_added'])
         except Exception as e:
             tb = traceback.format_exc()
             msg = str(e) or type(e).__name__
             summary.append({"name": pl["name"], "status": "error", "error": msg})
-            print(f"Scheduler: error refreshing '{pl['name']}': {msg}\n{tb}")
+            logger.error("Scheduler: error refreshing '%s': %s", pl['name'], msg)
     last_run = datetime.utcnow().isoformat()
     save_config({**config, "refresh_last_run": last_run, "refresh_last_run_summary": summary})
     webhook_url = config.get("webhook_url", "")
     if webhook_url:
         await _send_webhook(webhook_url, {"last_run": last_run, "summary": summary})
-    print("Scheduler: done")
+    logger.info("Scheduler: done")
     return {"last_run": last_run, "summary": summary}
 
 async def _plex_sync_all_job() -> dict:
     """Re-sync every Digarr playlist that lives in Plex, updating only when more
     tracks have become available (i.e. Lidarr finished downloading some)."""
-    print(f"Plex sync: starting — {datetime.utcnow().isoformat()}")
+    logger.info("Plex sync: starting")
     config = load_config()
     if not (config.get("plex_url") and config.get("plex_token") and config.get("plex_library_section_id")):
-        print("Plex sync: Plex not configured, skipping")
+        logger.info("Plex sync: Plex not configured, skipping")
         return {"synced": 0, "total": 0}
 
     playlists = get_playlists()
@@ -556,11 +572,11 @@ async def _plex_sync_all_job() -> dict:
             update_playlist_plex_result(pl["id"], new_id, len(matched_keys), total, unmatched,
                                         plex_playlist_name=plex_name)
             synced += 1
-            print(f"Plex sync: updated '{pl['name']}' — {len(matched_keys)}/{total} tracks")
+            logger.info("Plex sync: updated '%s' — %s/%s tracks", pl['name'], len(matched_keys), total)
         except Exception as exc:
-            print(f"Plex sync: error on '{pl['name']}': {exc}")
+            logger.error("Plex sync: error on '%s': %s", pl['name'], exc)
 
-    print(f"Plex sync: done — {synced}/{len(candidates)} updated")
+    logger.info("Plex sync: done — %s/%s updated", synced, len(candidates))
     return {"synced": synced, "total": len(candidates)}
 
 
@@ -645,7 +661,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                                            plex_playlist_name=plex_name)
                 job["plex_result"] = {"matched": len(matched_keys), "total": total}
         except Exception as exc:
-            print(f"Plex push failed for job {job_id}: {exc}")
+            logger.error("Plex push failed for job %s: %s", job_id, exc)
 
     # Spotify push — runs in parallel with Lidarr, same as Plex
     if "spotify" in targets and req.tracks:
@@ -665,7 +681,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                 )
                 job["spotify_result"] = {"matched": result["matched_count"], "total": result["total_count"]}
             except Exception as exc:
-                print(f"Spotify push failed for job {job_id}: {exc}")
+                logger.error("Spotify push failed for job %s: %s", job_id, exc)
 
     # Build album hint and first-track maps from track list
     album_hint_map: dict = {}
@@ -730,10 +746,12 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
             export_playlist_to_path(job["playlist_name"], req.tracks, config["playlist_export_path"])
     except Exception as exc:
         job["error"] = f"Failed to update playlist: {exc}"
-        print(f"Import job {job_id} update error: {traceback.format_exc()}")
+        logger.error("Import job %s update error", job_id, exc_info=True)
 
     job["status"] = "done"
     job["completed_at"] = datetime.utcnow().isoformat()
+    db_save_import_job(job)
+    db_prune_import_jobs()
     _prune_completed_jobs()
 
 
@@ -761,6 +779,7 @@ async def start_import_job(req: ImportJobRequest):
     job = _new_job(name, len(req.artists))
     job["playlist_id"] = playlist_id
     _jobs[job["id"]] = job
+    db_save_import_job(job)
     asyncio.create_task(_run_import_job(job["id"], req, playlist_id))
     return {"job_id": job["id"], "playlist_id": playlist_id}
 
@@ -1395,7 +1414,7 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                     "unmatched": unmatched,
                 }
         except Exception as e:
-            print(f"Auto Plex sync failed for playlist {playlist_id}: {e}")
+            logger.error("Auto Plex sync failed for playlist %s: %s", playlist_id, e)
 
     # Auto-sync Spotify if this playlist was previously pushed there
     spotify_sync_result = None
@@ -1421,7 +1440,7 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                     "playlist_id": result["playlist_id"],
                 }
             except Exception as e:
-                print(f"Auto Spotify sync failed for playlist {playlist_id}: {e}")
+                logger.error("Auto Spotify sync failed for playlist %s: %s", playlist_id, e)
 
     return {
         "new_artists": net_new_names,
