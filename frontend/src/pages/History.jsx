@@ -513,7 +513,7 @@ export default function History() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: isDone ? 'var(--green)' : isError ? 'var(--red)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {isDone
-                        ? `✓ ${added} artist${added !== 1 ? 's' : ''} added to Lidarr${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · ${job.plex_result.matched}/${job.plex_result.total} tracks in Plex` : ''}`
+                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · ${job.plex_result.matched}/${job.plex_result.total} tracks in Plex` : ''}`
                         : isError ? `Error: ${job.error}`
                         : job.status === 'queued' ? 'Queued…'
                         : `${job.current}/${job.total}${job.current_artist ? `: ${job.current_artist}` : ''}`}
@@ -627,7 +627,7 @@ export default function History() {
                         <span className="spinner" style={{ width: 8, height: 8 }} /> Importing…
                       </span>
                     ) : (
-                      <span className="badge badge-added">{pl.artists_added?.length || 0} in Lidarr</span>
+                      <span className="badge badge-added">{pl.artists_added?.length || 0} new artists</span>
                     )}
                     {pl.plex_playlist_id && (
                       <span className="badge" style={{ background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'default' }}
