@@ -784,11 +784,18 @@ export default function Settings() {
             <select value={config.refresh_interval_hours || 0}
               onChange={e => handleChange('refresh_interval_hours', parseInt(e.target.value))}>
               <option value={0}>Off</option>
+              <option value={1}>Every hour</option>
+              <option value={2}>Every 2 hours</option>
+              <option value={3}>Every 3 hours</option>
+              <option value={4}>Every 4 hours</option>
               <option value={6}>Every 6 hours</option>
+              <option value={8}>Every 8 hours</option>
               <option value={12}>Every 12 hours</option>
               <option value={24}>Daily</option>
               <option value={48}>Every 2 days</option>
+              <option value={72}>Every 3 days</option>
               <option value={168}>Weekly</option>
+              <option value={336}>Every 2 weeks</option>
             </select>
           </div>
           <div className="field">
