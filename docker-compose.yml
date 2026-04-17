@@ -1,0 +1,17 @@
+services:
+  digarr:
+    image: digarr:latest
+    build: .
+    container_name: digarr
+    ports:
+      - "8090:8090"
+    volumes:
+      - digarr_data:/data
+    environment:
+      - CONFIG_PATH=/data/config.json
+      - DB_PATH=/data/digarr.db
+    restart: unless-stopped
+
+volumes:
+  digarr_data:
+
