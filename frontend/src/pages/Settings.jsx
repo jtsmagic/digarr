@@ -240,46 +240,43 @@ export default function Settings() {
         {openSections.has('general') && <>
           <div className="field">
             <label>Timezone</label>
-            <input
-              list="tz-list"
+            <select
               value={config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'}
               onChange={e => handleChange('timezone', e.target.value)}
-              placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'}
-            />
-            <datalist id="tz-list">
-              <option value="America/New_York" />
-              <option value="America/Chicago" />
-              <option value="America/Denver" />
-              <option value="America/Phoenix" />
-              <option value="America/Los_Angeles" />
-              <option value="America/Anchorage" />
-              <option value="Pacific/Honolulu" />
-              <option value="Europe/London" />
-              <option value="Europe/Paris" />
-              <option value="Europe/Berlin" />
-              <option value="Europe/Madrid" />
-              <option value="Europe/Rome" />
-              <option value="Europe/Amsterdam" />
-              <option value="Europe/Stockholm" />
-              <option value="Europe/Helsinki" />
-              <option value="Europe/Warsaw" />
-              <option value="Europe/Lisbon" />
-              <option value="Europe/Athens" />
-              <option value="Europe/Istanbul" />
-              <option value="Europe/Moscow" />
-              <option value="Asia/Dubai" />
-              <option value="Asia/Kolkata" />
-              <option value="Asia/Bangkok" />
-              <option value="Asia/Singapore" />
-              <option value="Asia/Shanghai" />
-              <option value="Asia/Tokyo" />
-              <option value="Asia/Seoul" />
-              <option value="Australia/Sydney" />
-              <option value="Australia/Melbourne" />
-              <option value="Australia/Perth" />
-              <option value="Pacific/Auckland" />
-              <option value="UTC" />
-            </datalist>
+            >
+              <option value="America/New_York">America/New_York</option>
+              <option value="America/Chicago">America/Chicago</option>
+              <option value="America/Denver">America/Denver</option>
+              <option value="America/Phoenix">America/Phoenix</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
+              <option value="America/Anchorage">America/Anchorage</option>
+              <option value="Pacific/Honolulu">Pacific/Honolulu</option>
+              <option value="Europe/London">Europe/London</option>
+              <option value="Europe/Paris">Europe/Paris</option>
+              <option value="Europe/Berlin">Europe/Berlin</option>
+              <option value="Europe/Madrid">Europe/Madrid</option>
+              <option value="Europe/Rome">Europe/Rome</option>
+              <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+              <option value="Europe/Stockholm">Europe/Stockholm</option>
+              <option value="Europe/Helsinki">Europe/Helsinki</option>
+              <option value="Europe/Warsaw">Europe/Warsaw</option>
+              <option value="Europe/Lisbon">Europe/Lisbon</option>
+              <option value="Europe/Athens">Europe/Athens</option>
+              <option value="Europe/Istanbul">Europe/Istanbul</option>
+              <option value="Europe/Moscow">Europe/Moscow</option>
+              <option value="Asia/Dubai">Asia/Dubai</option>
+              <option value="Asia/Kolkata">Asia/Kolkata</option>
+              <option value="Asia/Bangkok">Asia/Bangkok</option>
+              <option value="Asia/Singapore">Asia/Singapore</option>
+              <option value="Asia/Shanghai">Asia/Shanghai</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="Asia/Seoul">Asia/Seoul</option>
+              <option value="Australia/Sydney">Australia/Sydney</option>
+              <option value="Australia/Melbourne">Australia/Melbourne</option>
+              <option value="Australia/Perth">Australia/Perth</option>
+              <option value="Pacific/Auckland">Pacific/Auckland</option>
+              <option value="UTC">UTC</option>
+            </select>
           </div>
           {/* Password */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', marginTop: '0.5rem' }}>
@@ -300,7 +297,7 @@ export default function Settings() {
                 </button>
               </div>
             )}
-            {!authStatus?.password_source && (
+            {!authStatus?.password_source && !authStatus?.methods?.includes('oidc') && (
               <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>No password set — Digarr is accessible to anyone who can reach it.</p>
             )}
             <div className="field">
