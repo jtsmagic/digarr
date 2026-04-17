@@ -278,19 +278,30 @@ digarr.yourdomain.com {
 
 ## Security
 
-### config.json contains secrets
+### config.json
 
-All sensitive values (API keys, Spotify client secret, Plex token) are stored in `/data/config.json` inside the container. Anyone with access to the data volume can read them in plaintext.
+Sensitive values (API keys, tokens) are stored in `/data/config.json`. Digarr automatically sets this file to `600` (owner read/write only) on every write, so no manual chmod is needed.
 
-**Recommended hardening:**
+### Env var overrides for secrets
 
-```bash
-# Restrict permissions on the data volume directory
-chmod 700 /path/to/digarr/data
-chmod 600 /path/to/digarr/data/config.json
-```
+You can supply any sensitive key via environment variable instead of storing it in `config.json`. Env vars take precedence over stored values:
 
-Alternatively, run the container as a non-root user and ensure the volume mount is owned by that user.
+| Env var | Overrides |
+|---|---|
+| `DIGARR_ANTHROPIC_KEY` | Anthropic API key |
+| `DIGARR_OPENAI_KEY` | OpenAI API key |
+| `DIGARR_LIDARR_KEY` | Lidarr API key |
+| `DIGARR_PLEX_TOKEN` | Plex token |
+| `DIGARR_SPOTIFY_CLIENT_ID` | Spotify client ID |
+| `DIGARR_SPOTIFY_CLIENT_SECRET` | Spotify client secret |
+| `DIGARR_LASTFM_KEY` | Last.fm API key |
+| `DIGARR_DISCOGS_TOKEN` | Discogs personal access token |
+
+This lets you use Docker `--env-file`, Compose `env_file:`, or a secrets manager without ever writing keys to disk.
+
+### Non-root container
+
+The container runs as a dedicated `digarr` user (non-root). If a vulnerability were exploited, the attacker would not have root access inside the container.
 
 ### Authentication
 
