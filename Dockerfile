@@ -12,7 +12,7 @@ FROM python:3.12-slim AS backend
 WORKDIR /app
 
 # Install nginx + envsubst (gettext-base) for port-templating
-RUN apt-get update && apt-get install -y nginx gettext-base gosu && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y nginx gettext-base gosu curl && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY backend/requirements.txt ./
