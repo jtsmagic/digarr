@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import json
 import os
@@ -190,6 +191,11 @@ def get_db():
 _SESSION_TTL_DAYS = 30
 
 
+def _hash_token(token: str) -> str:
+    """SHA-256 of the raw token. Only the hash is stored; the plaintext stays with the client."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def db_save_session(token: str) -> None:
     from datetime import timedelta
     now = datetime.utcnow()
@@ -197,7 +203,7 @@ def db_save_session(token: str) -> None:
     conn = get_db()
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)",
-              (token, now.isoformat(), expires))
+              (_hash_token(token), now.isoformat(), expires))
     conn.commit()
     conn.close()
 
@@ -207,7 +213,7 @@ def db_is_valid_session(token: str) -> bool:
         return False
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT expires_at FROM sessions WHERE token = ?", (token,))
+    c.execute("SELECT expires_at FROM sessions WHERE token = ?", (_hash_token(token),))
     row = c.fetchone()
     conn.close()
     if not row:
@@ -221,7 +227,7 @@ def db_is_valid_session(token: str) -> bool:
 def db_revoke_session(token: str) -> None:
     conn = get_db()
     c = conn.cursor()
-    c.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    c.execute("DELETE FROM sessions WHERE token = ?", (_hash_token(token),))
     conn.commit()
     conn.close()
 
