@@ -6,7 +6,7 @@ from typing import List
 
 DB_PATH = os.environ.get("DB_PATH", "/data/digarr.db")
 
-SCHEMA_VERSION = 2  # Bump this when adding new migrations below
+SCHEMA_VERSION = 3  # Bump this when adding new migrations below
 
 
 def _get_schema_version(c) -> int:
@@ -137,6 +137,15 @@ def init_db():
             verifier   TEXT NOT NULL DEFAULT '',
             flow       TEXT NOT NULL,
             expires_at TEXT NOT NULL
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS import_jobs (
+            id           TEXT PRIMARY KEY,
+            job_json     TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            status       TEXT NOT NULL
         )
     """)
 
@@ -723,4 +732,49 @@ def consume_oauth_state(state: str, flow: str) -> str | None:
     if row["expires_at"] < now:
         return None
     return row["verifier"]
+
+
+# ---------------------------------------------------------------------------
+# Import job persistence
+# ---------------------------------------------------------------------------
+
+_MAX_PERSISTED_JOBS = 30
+
+
+def db_save_import_job(job: dict) -> None:
+    conn = get_db()
+    conn.execute(
+        """INSERT OR REPLACE INTO import_jobs (id, job_json, created_at, status)
+           VALUES (?, ?, ?, ?)""",
+        (job["id"], json.dumps(job), job["created_at"], job["status"]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_load_recent_import_jobs() -> list[dict]:
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT job_json FROM import_jobs ORDER BY created_at DESC LIMIT ?",
+        (_MAX_PERSISTED_JOBS,),
+    ).fetchall()
+    conn.close()
+    return [json.loads(row["job_json"]) for row in rows]
+
+
+def db_prune_import_jobs() -> None:
+    conn = get_db()
+    keep_ids = conn.execute(
+        "SELECT id FROM import_jobs ORDER BY created_at DESC LIMIT ?",
+        (_MAX_PERSISTED_JOBS,),
+    ).fetchall()
+    if keep_ids:
+        placeholders = ",".join("?" * len(keep_ids))
+        conn.execute(
+            f"DELETE FROM import_jobs WHERE id NOT IN ({placeholders})",
+            [row[0] for row in keep_ids],
+        )
+    conn.commit()
+    conn.close()
 
