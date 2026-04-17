@@ -801,6 +801,51 @@ export default function Settings() {
             </p>
           </div>
 
+          {config.webhook_url && (() => {
+            const on = config.refresh_webhook_on_changes_only || false;
+            return (
+              <div className="field" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6rem', cursor: 'pointer' }}
+                onClick={() => handleChange('refresh_webhook_on_changes_only', !on)}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 18, height: 18, flexShrink: 0, fontSize: 14, fontWeight: 700, marginTop: 2,
+                  color: on ? 'var(--green)' : 'var(--text-muted)',
+                }}>
+                  {on ? '✓' : '○'}
+                </span>
+                <div>
+                  <span style={{ fontSize: 13 }}>Only fire webhook when new content is found</span>
+                  <p className="text-muted" style={{ fontSize: 11, marginTop: '0.2rem' }}>
+                    Suppresses the webhook when a scheduled refresh completes with no new artists added.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+
+          <div className="field" style={{ display: 'flex', gap: '1rem' }}>
+            <div style={{ flex: 1 }}>
+              <label>Delay Between Playlists <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— seconds</span></label>
+              <input type="number" min={0} max={300}
+                value={config.refresh_delay_between_playlists || 0}
+                onChange={e => handleChange('refresh_delay_between_playlists', Math.max(0, parseInt(e.target.value) || 0))}
+                style={{ width: '100%' }} />
+              <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+                Wait this many seconds between each playlist. Helps avoid rate limits on external sources.
+              </p>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>Max New Artists Per Run <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— 0 = unlimited</span></label>
+              <input type="number" min={0}
+                value={config.refresh_max_new_artists || 0}
+                onChange={e => handleChange('refresh_max_new_artists', Math.max(0, parseInt(e.target.value) || 0))}
+                style={{ width: '100%' }} />
+              <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+                Stop adding new artists to Lidarr once this many have been added in a single run.
+              </p>
+            </div>
+          </div>
+
           {(() => {
             const on = config.refresh_merge_tracks !== undefined ? config.refresh_merge_tracks : false;
             return (

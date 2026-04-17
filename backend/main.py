@@ -535,17 +535,27 @@ async def _refresh_all_playlists_job() -> dict:
         and pl.get("source_type") in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify")
         and pl["id"] not in excluded
     ]
+    delay = int(config.get("refresh_delay_between_playlists") or 0)
+    max_new = int(config.get("refresh_max_new_artists") or 0)
+    total_new_artists = 0
     summary = []
-    for pl in refreshable:
+    for i, pl in enumerate(refreshable):
+        if max_new and total_new_artists >= max_new:
+            logger.info("Scheduler: max new artists (%s) reached, stopping early", max_new)
+            break
+        if delay and i > 0:
+            await asyncio.sleep(delay)
         try:
             result = await _do_refresh_playlist(pl["id"])
+            added = result["new_artists_added"]
+            total_new_artists += added
             summary.append({
                 "name": pl["name"],
-                "new_artists": result["new_artists_added"],
+                "new_artists": added,
                 "total_tracks": result["total_tracks"],
                 "status": "ok",
             })
-            logger.info("Scheduler: refreshed '%s' — %s new artists", pl['name'], result['new_artists_added'])
+            logger.info("Scheduler: refreshed '%s' — %s new artists", pl['name'], added)
         except Exception as e:
             tb = traceback.format_exc()
             msg = str(e) or type(e).__name__
@@ -555,7 +565,10 @@ async def _refresh_all_playlists_job() -> dict:
     save_config({**config, "refresh_last_run": last_run, "refresh_last_run_summary": summary})
     webhook_url = config.get("webhook_url", "")
     if webhook_url:
-        await _send_webhook(webhook_url, {"last_run": last_run, "summary": summary})
+        changes_only = config.get("refresh_webhook_on_changes_only", False)
+        has_changes = any(e.get("new_artists", 0) > 0 for e in summary if e.get("status") == "ok")
+        if not changes_only or has_changes:
+            await _send_webhook(webhook_url, {"last_run": last_run, "summary": summary})
     logger.info("Scheduler: done")
     return {"last_run": last_run, "summary": summary}
 
