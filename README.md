@@ -276,6 +276,36 @@ digarr.yourdomain.com {
 
 ---
 
+## Security
+
+### config.json contains secrets
+
+All sensitive values (API keys, Spotify client secret, Plex token) are stored in `/data/config.json` inside the container. Anyone with access to the data volume can read them in plaintext.
+
+**Recommended hardening:**
+
+```bash
+# Restrict permissions on the data volume directory
+chmod 700 /path/to/digarr/data
+chmod 600 /path/to/digarr/data/config.json
+```
+
+Alternatively, run the container as a non-root user and ensure the volume mount is owned by that user.
+
+### Authentication
+
+If Digarr is internet-facing, enable authentication in **Settings → General**. Without a password or OIDC configured, the app is open to anyone who can reach it.
+
+### CORS
+
+By default `allow_origins=["*"]` is set for ease of local use. On a public instance, restrict it:
+
+```bash
+docker run -e DIGARR_CORS_ORIGINS="https://digarr.yourdomain.com" ...
+```
+
+---
+
 ## Contributing
 
 PRs welcome. This is a personal project built for the self-hosting community — if you use Lidarr and want a smarter way to feed it, this is for you.

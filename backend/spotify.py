@@ -14,6 +14,19 @@ def extract_playlist_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+async def _spotify_get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+    """GET with automatic retry on 429. Respects Retry-After header (max 30s wait)."""
+    for attempt in range(4):
+        r = await client.get(url, **kwargs)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r
+        retry_after = min(int(r.headers.get("Retry-After", "2")), 30)
+        await asyncio.sleep(retry_after)
+    r.raise_for_status()
+    return r
+
+
 # ---------------------------------------------------------------------------
 # Client Credentials (kept for fallback / public playlists without login)
 # ---------------------------------------------------------------------------
@@ -154,20 +167,19 @@ async def fetch_playlist(playlist_id: str, token: str) -> dict:
     tracks = []
 
     async with httpx.AsyncClient(timeout=30) as client:
-        meta_r = await client.get(
+        meta_r = await _spotify_get(
+            client,
             f"https://api.spotify.com/v1/playlists/{playlist_id}",
             headers=headers,
             params={"market": "US"},
         )
-        meta_r.raise_for_status()
         playlist_name = meta_r.json().get("name", "Spotify Playlist")
 
         url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
         params: dict = {"limit": 100, "market": "US"}
 
         while url:
-            r = await client.get(url, headers=headers, params=params)
-            r.raise_for_status()
+            r = await _spotify_get(client, url, headers=headers, params=params)
             data = r.json()
             params = {}
 
@@ -204,8 +216,7 @@ async def fetch_liked_songs(token: str) -> dict:
         params: dict = {"limit": 50, "market": "US"}
 
         while url:
-            r = await client.get(url, headers=headers, params=params)
-            r.raise_for_status()
+            r = await _spotify_get(client, url, headers=headers, params=params)
             data = r.json()
             params = {}
 
