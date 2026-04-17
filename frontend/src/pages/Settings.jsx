@@ -73,7 +73,7 @@ export default function Settings() {
     }
     axios.get('/api/playlists').then(r => {
       const all = r.data.playlists || [];
-      setRefreshablePlaylists(all.filter(p => p.source_url && (p.source_type === 'url' || p.source_type === 'm3u_url')));
+      setRefreshablePlaylists(all.filter(p => p.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs', 'spotify'].includes(p.source_type)));
     }).catch(() => {});
     axios.get('/api/library/cache/status').then(r => {
       setCacheStatus(r.data);
@@ -681,9 +681,16 @@ export default function Settings() {
               onChange={e => handleChange('plex_sync_interval_hours', parseInt(e.target.value))}>
               <option value={0}>Off</option>
               <option value={1}>Every hour</option>
+              <option value={2}>Every 2 hours</option>
+              <option value={3}>Every 3 hours</option>
+              <option value={4}>Every 4 hours</option>
               <option value={6}>Every 6 hours</option>
+              <option value={8}>Every 8 hours</option>
               <option value={12}>Every 12 hours</option>
               <option value={24}>Daily</option>
+              <option value={48}>Every 2 days</option>
+              <option value={72}>Every 3 days</option>
+              <option value={168}>Weekly</option>
             </select>
             <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
               Re-syncs all Plex playlists on a schedule — fills them in as Lidarr downloads complete. Useful for text and file imports that have no refresh URL.

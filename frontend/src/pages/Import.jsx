@@ -117,11 +117,11 @@ export default function Import() {
     }
   };
 
-  const handleParse = async () => {
+  const handleParse = async (forceBypass = false) => {
     if (!content && inputType !== 'file') return;
 
     // Duplicate source check for URLs (skip if user already chose to proceed)
-    if (inputType === 'url' && !bypassConflict) {
+    if (inputType === 'url' && !bypassConflict && !forceBypass) {
       try {
         const check = await axios.get('/api/playlists/check-source', { params: { url: content } });
         if (check.data.matches?.length > 0) {
@@ -380,7 +380,7 @@ export default function Import() {
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
             <button className="btn btn-ghost" style={{ fontSize: 11 }}
-              onClick={() => { setBypassConflict(true); setSourceConflict(null); handleParse(); }}>
+              onClick={() => { setBypassConflict(true); setSourceConflict(null); handleParse(true); }}>
               Import anyway
             </button>
             <button className="btn btn-ghost" style={{ fontSize: 11 }}
