@@ -46,6 +46,7 @@ from database import (
     update_playlist_plex_result, update_playlist, update_playlist_import_results,
     update_playlist_spotify_result,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
+    db_delete_import_jobs_for_playlist,
     get_all_playlist_artist_names,
     # track_cache
     db_upsert_track_cache, db_search_track_cache, db_get_cache_stats, db_lookup_track_cache,
@@ -1221,6 +1222,11 @@ async def delete_playlist_route(playlist_id: int):
                 pass  # Best-effort — don't block local deletion if Plex is unreachable
 
     delete_playlist(playlist_id)
+    # Remove import jobs for this playlist from memory and the DB
+    to_remove = [jid for jid, j in _jobs.items() if j.get("playlist_id") == playlist_id]
+    for jid in to_remove:
+        del _jobs[jid]
+    db_delete_import_jobs_for_playlist(playlist_id)
     return {"ok": True}
 
 class SetRefreshRequest(BaseModel):
