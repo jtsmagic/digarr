@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/data/config.json")
 
@@ -49,22 +50,48 @@ DEFAULTS = {
     "oidc_redirect_uri": "",
 }
 
+# Environment variable overrides for sensitive keys.
+# Set these instead of storing secrets in config.json (e.g. via Docker --env-file or secrets).
+_ENV_OVERRIDES: dict[str, str] = {
+    "anthropic_api_key":    "DIGARR_ANTHROPIC_KEY",
+    "openai_api_key":       "DIGARR_OPENAI_KEY",
+    "lidarr_api_key":       "DIGARR_LIDARR_KEY",
+    "plex_token":           "DIGARR_PLEX_TOKEN",
+    "spotify_client_id":    "DIGARR_SPOTIFY_CLIENT_ID",
+    "spotify_client_secret":"DIGARR_SPOTIFY_CLIENT_SECRET",
+    "lastfm_api_key":       "DIGARR_LASTFM_KEY",
+    "discogs_token":        "DIGARR_DISCOGS_TOKEN",
+}
+
+
 def load_config() -> dict:
     if not os.path.exists(CONFIG_PATH):
-        return DEFAULTS.copy()
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            data = json.load(f)
-        # Merge with defaults for any missing keys
-        return {**DEFAULTS, **data}
-    except Exception:
-        return DEFAULTS.copy()
+        config = DEFAULTS.copy()
+    else:
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            config = {**DEFAULTS, **data}
+        except Exception:
+            config = DEFAULTS.copy()
+    # Env vars take precedence over stored values for sensitive keys
+    for key, env_var in _ENV_OVERRIDES.items():
+        val = os.environ.get(env_var, "")
+        if val:
+            config[key] = val
+    return config
+
 
 def save_config(config: dict):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    # Merge with existing
     existing = load_config()
     existing.update(config)
-    with open(CONFIG_PATH, "w") as f:
+    path = CONFIG_PATH
+    with open(path, "w") as f:
         json.dump(existing, f, indent=2)
+    # Restrict to owner read/write only — no world or group access
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
 
