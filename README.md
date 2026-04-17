@@ -304,6 +304,16 @@ By default `allow_origins=["*"]` is set for ease of local use. On a public insta
 docker run -e DIGARR_CORS_ORIGINS="https://digarr.yourdomain.com" ...
 ```
 
+### Structured logging
+
+By default logs are plain text. Set `LOG_FORMAT=json` to get newline-delimited JSON — useful when forwarding to a log aggregator (Loki, Datadog, etc.):
+
+```bash
+docker run -e LOG_FORMAT=json ...
+```
+
+Each line is a JSON object with `ts`, `level`, `logger`, `msg`, and (on errors) `exc`.
+
 ---
 
 ## Contributing

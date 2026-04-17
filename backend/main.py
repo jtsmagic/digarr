@@ -13,10 +13,30 @@ import traceback
 import uuid
 from datetime import datetime
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+import json as _json
+
+if os.environ.get("LOG_FORMAT", "").lower() == "json":
+    class _JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            entry = {
+                "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+            }
+            if record.exc_info:
+                entry["exc"] = self.formatException(record.exc_info)
+            return _json.dumps(entry)
+
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JsonFormatter())
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(_handler)
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 logger = logging.getLogger(__name__)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
