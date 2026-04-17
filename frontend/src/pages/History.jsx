@@ -288,9 +288,13 @@ export default function History() {
   const handleDelete = async (e, pl) => {
     e.stopPropagation();
     if (confirmDelete === pl.id) {
-      await axios.delete(`/api/playlists/${pl.id}`);
-      setPlaylists(prev => prev.filter(p => p.id !== pl.id));
-      if (selected?.id === pl.id) setSelected(null);
+      try {
+        await axios.delete(`/api/playlists/${pl.id}`);
+        setPlaylists(prev => prev.filter(p => p.id !== pl.id));
+        if (selected?.id === pl.id) setSelected(null);
+      } catch {
+        // deletion failed — leave playlist in list
+      }
       setConfirmDelete(null);
     } else {
       setConfirmDelete(pl.id);
