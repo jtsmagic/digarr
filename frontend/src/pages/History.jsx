@@ -3,6 +3,13 @@ import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { formatDate } from '../utils';
 
+function safeHref(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? url : null;
+  } catch { return null; }
+}
+
 export default function History() {
   const [playlists, setPlaylists] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -600,8 +607,8 @@ export default function History() {
                     </div>
                     <div className="text-muted text-mono">
                       {fmt(pl.created_at)}
-                      {pl.source_url && (
-                        <> · <a href={pl.source_url} target="_blank" rel="noreferrer"
+                      {safeHref(pl.source_url) && (
+                        <> · <a href={safeHref(pl.source_url)} target="_blank" rel="noreferrer"
                           style={{ color: 'var(--accent)', textDecoration: 'none' }}
                           onClick={e => e.stopPropagation()}>
                           source ↗
