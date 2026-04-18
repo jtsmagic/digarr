@@ -21,8 +21,12 @@ export default function Settings() {
   const [spotifyStatus, setSpotifyStatus] = useState(null);
   const [jellyfinStatus, setJellyfinStatus] = useState(null);
   const [jellyfinTesting, setJellyfinTesting] = useState(false);
+  const [jellyfinCacheStatus, setJellyfinCacheStatus] = useState(null);
+  const jellyfinCachePollerRef = useRef(null);
   const [navidromeStatus, setNavidromeStatus] = useState(null);
   const [navidromeTesting, setNavidromeTesting] = useState(false);
+  const [navidromeCacheStatus, setNavidromeCacheStatus] = useState(null);
+  const navidromeCachePollerRef = useRef(null);
   const [spotifyDisconnecting, setSpotifyDisconnecting] = useState(false);
   const [refreshablePlaylists, setRefreshablePlaylists] = useState([]);
   const [openSections, setOpenSections] = useState(() => new Set(['general']));
@@ -83,6 +87,8 @@ export default function Settings() {
       setCacheStatus(r.data);
       if (r.data.refresh_state === 'running') startCachePoller();
     }).catch(() => {});
+    axios.get('/api/jellyfin/cache/status').then(r => setJellyfinCacheStatus(r.data)).catch(() => {});
+    axios.get('/api/navidrome/cache/status').then(r => setNavidromeCacheStatus(r.data)).catch(() => {});
   }, []);
 
   const toggleExcluded = (id) => {
@@ -181,8 +187,11 @@ export default function Settings() {
     }
   };
 
-  // Stop poller interval on unmount (the background task keeps running on the server).
-  useEffect(() => () => { if (cachePollerRef.current) clearInterval(cachePollerRef.current); }, []);
+  useEffect(() => () => {
+    if (cachePollerRef.current) clearInterval(cachePollerRef.current);
+    if (jellyfinCachePollerRef.current) clearInterval(jellyfinCachePollerRef.current);
+    if (navidromeCachePollerRef.current) clearInterval(navidromeCachePollerRef.current);
+  }, []);
 
   const handleLoadProfiles = async () => {
     setLoadingProfiles(true);
@@ -233,6 +242,54 @@ export default function Settings() {
       setNavidromeStatus({ error: e.response?.data?.detail || 'Connection failed.' });
     } finally {
       setNavidromeTesting(false);
+    }
+  };
+
+  const startJellyfinCachePoller = () => {
+    if (jellyfinCachePollerRef.current) clearInterval(jellyfinCachePollerRef.current);
+    jellyfinCachePollerRef.current = setInterval(async () => {
+      try {
+        const res = await axios.get('/api/jellyfin/cache/status');
+        setJellyfinCacheStatus(res.data);
+        if (res.data.refresh_state !== 'running') {
+          clearInterval(jellyfinCachePollerRef.current);
+          jellyfinCachePollerRef.current = null;
+        }
+      } catch {}
+    }, 1500);
+  };
+
+  const handleRefreshJellyfinCache = async () => {
+    try {
+      await axios.post('/api/jellyfin/cache/refresh');
+      setJellyfinCacheStatus(prev => ({ ...(prev || {}), refresh_state: 'running' }));
+      startJellyfinCachePoller();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Failed to start Jellyfin cache refresh.');
+    }
+  };
+
+  const startNavidromeCachePoller = () => {
+    if (navidromeCachePollerRef.current) clearInterval(navidromeCachePollerRef.current);
+    navidromeCachePollerRef.current = setInterval(async () => {
+      try {
+        const res = await axios.get('/api/navidrome/cache/status');
+        setNavidromeCacheStatus(res.data);
+        if (res.data.refresh_state !== 'running') {
+          clearInterval(navidromeCachePollerRef.current);
+          navidromeCachePollerRef.current = null;
+        }
+      } catch {}
+    }, 1500);
+  };
+
+  const handleRefreshNavidromeCache = async () => {
+    try {
+      await axios.post('/api/navidrome/cache/refresh');
+      setNavidromeCacheStatus(prev => ({ ...(prev || {}), refresh_state: 'running' }));
+      startNavidromeCachePoller();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Failed to start Navidrome cache refresh.');
     }
   };
 
@@ -821,6 +878,67 @@ export default function Settings() {
               )}
             </div>
           )}
+          <div className="field">
+            <label>Jellyfin Sync Interval</label>
+            <select value={config.jellyfin_sync_interval_hours || 0}
+              onChange={e => handleChange('jellyfin_sync_interval_hours', parseInt(e.target.value))}>
+              <option value={0}>Off</option>
+              <option value={1}>Every hour</option>
+              <option value={2}>Every 2 hours</option>
+              <option value={3}>Every 3 hours</option>
+              <option value={4}>Every 4 hours</option>
+              <option value={6}>Every 6 hours</option>
+              <option value={8}>Every 8 hours</option>
+              <option value={12}>Every 12 hours</option>
+              <option value={24}>Daily</option>
+              <option value={48}>Every 2 days</option>
+              <option value={72}>Every 3 days</option>
+              <option value={168}>Weekly</option>
+            </select>
+          </div>
+          {[
+            { key: 'jellyfin_append_digarr', defaultVal: false, label: <>Append <span className="text-mono" style={{ fontSize: 12 }}> — Digarr</span> to playlist names in Jellyfin</> },
+            { key: 'jellyfin_delete_on_remove', defaultVal: false, label: 'Delete playlist from Jellyfin when deleted from Digarr' },
+          ].map(({ key, defaultVal, label }) => {
+            const on = config[key] !== undefined ? config[key] : defaultVal;
+            return (
+              <div key={key} className="field" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }}
+                onClick={() => handleChange(key, !on)}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, flexShrink: 0, fontSize: 14, fontWeight: 700, color: on ? 'var(--green)' : 'var(--text-muted)' }}>
+                  {on ? '✓' : '○'}
+                </span>
+                <span style={{ fontSize: 13 }}>{label}</span>
+              </div>
+            );
+          })}
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>Library Cache</div>
+            <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
+              Caches all tracks from your Jellyfin library for faster playlist matching. Run a refresh after adding new music.
+            </p>
+            {jellyfinCacheStatus && (() => {
+              const isError = jellyfinCacheStatus.refresh_state === 'error';
+              return (
+                <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                  {isError ? (
+                    <span style={{ color: 'var(--red)' }}>✕ Refresh failed: {jellyfinCacheStatus.refresh_error}</span>
+                  ) : jellyfinCacheStatus.track_count > 0 ? (
+                    <span style={{ color: 'var(--text-dim)' }}>
+                      <span style={{ color: 'var(--green)' }}>✓</span>{' '}
+                      {jellyfinCacheStatus.track_count.toLocaleString()} tracks cached
+                      {jellyfinCacheStatus.cached_at && <span className="text-muted" style={{ marginLeft: 8 }}>· {new Date(jellyfinCacheStatus.cached_at).toLocaleString()}</span>}
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>Cache is empty — run a refresh.</span>
+                  )}
+                </div>
+              );
+            })()}
+            <button className="btn btn-ghost" onClick={handleRefreshJellyfinCache}
+              disabled={jellyfinCacheStatus?.refresh_state === 'running'}>
+              ⟳ Refresh Library Cache
+            </button>
+          </div>
         </>}
       </div>
 
@@ -864,6 +982,67 @@ export default function Settings() {
               )}
             </div>
           )}
+          <div className="field">
+            <label>Navidrome Sync Interval</label>
+            <select value={config.navidrome_sync_interval_hours || 0}
+              onChange={e => handleChange('navidrome_sync_interval_hours', parseInt(e.target.value))}>
+              <option value={0}>Off</option>
+              <option value={1}>Every hour</option>
+              <option value={2}>Every 2 hours</option>
+              <option value={3}>Every 3 hours</option>
+              <option value={4}>Every 4 hours</option>
+              <option value={6}>Every 6 hours</option>
+              <option value={8}>Every 8 hours</option>
+              <option value={12}>Every 12 hours</option>
+              <option value={24}>Daily</option>
+              <option value={48}>Every 2 days</option>
+              <option value={72}>Every 3 days</option>
+              <option value={168}>Weekly</option>
+            </select>
+          </div>
+          {[
+            { key: 'navidrome_append_digarr', defaultVal: false, label: <>Append <span className="text-mono" style={{ fontSize: 12 }}> — Digarr</span> to playlist names in Navidrome</> },
+            { key: 'navidrome_delete_on_remove', defaultVal: false, label: 'Delete playlist from Navidrome when deleted from Digarr' },
+          ].map(({ key, defaultVal, label }) => {
+            const on = config[key] !== undefined ? config[key] : defaultVal;
+            return (
+              <div key={key} className="field" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }}
+                onClick={() => handleChange(key, !on)}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, flexShrink: 0, fontSize: 14, fontWeight: 700, color: on ? 'var(--green)' : 'var(--text-muted)' }}>
+                  {on ? '✓' : '○'}
+                </span>
+                <span style={{ fontSize: 13 }}>{label}</span>
+              </div>
+            );
+          })}
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>Library Cache</div>
+            <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
+              Caches all tracks from your Navidrome library for faster playlist matching. Run a refresh after adding new music.
+            </p>
+            {navidromeCacheStatus && (() => {
+              const isError = navidromeCacheStatus.refresh_state === 'error';
+              return (
+                <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                  {isError ? (
+                    <span style={{ color: 'var(--red)' }}>✕ Refresh failed: {navidromeCacheStatus.refresh_error}</span>
+                  ) : navidromeCacheStatus.track_count > 0 ? (
+                    <span style={{ color: 'var(--text-dim)' }}>
+                      <span style={{ color: 'var(--green)' }}>✓</span>{' '}
+                      {navidromeCacheStatus.track_count.toLocaleString()} tracks cached
+                      {navidromeCacheStatus.cached_at && <span className="text-muted" style={{ marginLeft: 8 }}>· {new Date(navidromeCacheStatus.cached_at).toLocaleString()}</span>}
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>Cache is empty — run a refresh.</span>
+                  )}
+                </div>
+              );
+            })()}
+            <button className="btn btn-ghost" onClick={handleRefreshNavidromeCache}
+              disabled={navidromeCacheStatus?.refresh_state === 'running'}>
+              ⟳ Refresh Library Cache
+            </button>
+          </div>
         </>}
       </div>
 
