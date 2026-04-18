@@ -270,7 +270,7 @@ export default function Import() {
   return (
     <div>
       <h1 className="page-title">Import</h1>
-      <p className="page-subtitle">Drop a URL, paste a list, or upload a file — Claude does the rest</p>
+      <p className="page-subtitle">Drop a URL, paste a list, or upload a file — AI does the rest</p>
 
       {setupItems.filter(i => !i.warning).length > 0 && (
         <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '3px solid var(--accent)' }}>
