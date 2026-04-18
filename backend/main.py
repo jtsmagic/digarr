@@ -2418,6 +2418,36 @@ async def deemix_status():
         return {"configured": True, "error": str(e)}
 
 
+@app.get("/api/deemix/playlists")
+async def deemix_playlists():
+    config = load_config()
+    if not config.get("deemix_url"):
+        raise HTTPException(status_code=400, detail="Deemix not configured.")
+    try:
+        dx = DeemixClient(config["deemix_url"])
+        playlists = await dx.get_user_playlists()
+        return {"playlists": playlists}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch playlists: {e}")
+
+
+@app.get("/api/deemix/playlist/{playlist_id}")
+async def deemix_playlist_tracks(playlist_id: str):
+    config = load_config()
+    if not config.get("deemix_url"):
+        raise HTTPException(status_code=400, detail="Deemix not configured.")
+    try:
+        dx = DeemixClient(config["deemix_url"])
+        data = await dx.get_playlist_tracks(playlist_id)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch playlist tracks: {e}")
+
+
 # ---------------------------------------------------------------------------
 # slskd endpoints
 # ---------------------------------------------------------------------------

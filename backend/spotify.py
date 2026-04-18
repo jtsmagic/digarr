@@ -114,7 +114,16 @@ async def get_oauth_token(config: dict) -> str | None:
         return None
 
     from config import save_config  # avoid circular at module level
-    new_data = await _do_refresh(client_id, refresh_token)
+    try:
+        new_data = await _do_refresh(client_id, refresh_token)
+    except httpx.HTTPStatusError:
+        # Refresh token is invalid/revoked — clear it so the UI prompts reconnect
+        save_config({
+            "spotify_access_token": "",
+            "spotify_refresh_token": "",
+            "spotify_token_expires_at": "",
+        })
+        return None
     save_config(new_data)
     return new_data["spotify_access_token"]
 

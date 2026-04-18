@@ -77,6 +77,50 @@ class DeemixClient:
             })
         return candidates
 
+    async def get_user_playlists(self) -> list[dict]:
+        """Return the logged-in Deezer user's playlists via deemix."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{self.base_url}/api/getUserPlaylists")
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                raise ValueError(data["error"])
+            playlists = data.get("playlists", data) if isinstance(data, dict) else data
+            if isinstance(playlists, dict):
+                playlists = playlists.get("data", list(playlists.values()))
+            return [
+                {
+                    "id": str(p.get("id", "")),
+                    "name": p.get("title") or p.get("name") or "Untitled",
+                    "nb_tracks": p.get("nb_tracks") or p.get("track_count") or 0,
+                    "picture": p.get("picture_medium") or p.get("picture") or "",
+                }
+                for p in (playlists or [])
+                if p.get("id")
+            ]
+
+    async def get_playlist_tracks(self, playlist_id: str) -> dict:
+        """Fetch tracks for a Deezer playlist via the public Deezer API."""
+        tracks = []
+        url = f"https://api.deezer.com/playlist/{playlist_id}/tracks"
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            while url:
+                r = await client.get(url, params={"limit": 200})
+                r.raise_for_status()
+                data = r.json()
+                if "error" in data:
+                    raise ValueError(data["error"].get("message", str(data["error"])))
+                for item in data.get("data", []):
+                    tracks.append({
+                        "id": str(item.get("id", "")),
+                        "title": item.get("title", ""),
+                        "artist": (item.get("artist") or {}).get("name", ""),
+                        "album": (item.get("album") or {}).get("title", ""),
+                        "duration": item.get("duration", 0),
+                    })
+                url = data.get("next")  # pagination
+        return {"tracks": tracks, "total": len(tracks)}
+
     async def queue_track(self, deezer_url: str, bitrate: str = "FLAC") -> dict:
         """Add a Deezer track URL to the Deemix download queue."""
         async with _get_semaphore():
