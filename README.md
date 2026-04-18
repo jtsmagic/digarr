@@ -13,25 +13,26 @@ Digarr is a self-hosted web app that imports artists and playlists into [Lidarr]
 ## Features
 
 - **Parse anything** — paste a URL, upload an M3U, drop in a raw text list, or use a Spotify playlist URL; M3U URLs are auto-detected, no separate tab needed
-- **AI-powered extraction** — Claude identifies artists and tracks from unstructured content; confidence scores dim low-confidence results so you can review before adding
+- **AI-powered extraction** — Claude or OpenAI identifies artists and tracks from unstructured content; confidence scores dim low-confidence results so you can review before adding
 - **Lidarr integration** — search, check library, and add artists in one click
-- **Track status** — see which tracks are downloaded (green/yellow/red) vs missing; unmatched tracks can be ignored or manually matched
-- **Manual track matching** — search your Plex library cache for unmatched tracks and confirm the right match; matches persist across refreshes
+- **Track status** — see which tracks are downloaded (green/yellow/red) vs missing
+- **Manual track matching** — search your Plex, Jellyfin, or Navidrome library cache for unmatched tracks and confirm the right match; matches persist across refreshes
 - **M3U / JSPF export** — download parsed playlists as M3U or JSON (JSPF) files
-- **Plex integration** — push playlists directly to Plex; unmatched tracks trigger Lidarr monitoring automatically; Sync All button re-syncs every Plex playlist in one shot
-- **Playlist history** — every import saved locally with full track/artist detail; inline rename syncs to Plex atomically
+- **Plex integration** — push playlists directly to Plex; unmatched tracks trigger Lidarr monitoring automatically; Sync All re-syncs every playlist in one shot
+- **Jellyfin integration** — push and sync playlists to Jellyfin; library cache for fast matching; scheduled sync interval
+- **Navidrome integration** — push and sync playlists via Subsonic API; library cache for fast matching; scheduled sync interval
+- **Spotify integration** — OAuth (PKCE) for importing your playlists and Liked Songs; push any Digarr playlist to Spotify from History
+- **Playlist history** — every import saved locally with full track/artist detail; inline rename, delete, and refresh
 - **Background import queue** — imports run in the background with a live progress bar; navigate away and come back without losing state
-- **Playlist refresh** — re-fetch any source URL, add net-new artists to Lidarr, and re-sync Plex in one shot; merge mode appends new tracks rather than replacing
-- **Scheduled refresh** — auto-refresh all playlists on a configurable interval (6h / 12h / daily / weekly); per-playlist include/exclude control; webhook fires after each run
+- **Playlist refresh** — re-fetch any source URL, add net-new artists to Lidarr, and re-sync all connected media servers; merge mode appends new tracks rather than replacing
+- **Scheduled refresh** — auto-refresh all playlists on a configurable interval (1h through bi-weekly); per-playlist include/exclude control; webhook fires after each run
+- **Scheduled media server sync** — independent sync intervals for Plex, Jellyfin, and Navidrome; fills playlists in as Lidarr finishes downloading
+- **Discover page** — curated feeds from Spotify, ListenBrainz, Similar to Library, and Discogs Wantlist; review recommendations with library status badges and import directly
 - **Wanted/missing report** — see which Lidarr artists added via Digarr still have undownloaded albums
-- **Discover page** — curated feeds from Spotify, ListenBrainz, Similar to Library, and Discogs Wantlist; review recommendations with library status badges and import directly to Lidarr/Plex
-- **Spotify OAuth** — connect your Spotify account to import Discover Weekly, Daily Mixes, Release Radar, and Liked Songs; editorial playlists that previously required URL workarounds just work; PKCE flow, tokens auto-refresh
-- **Plex → Spotify sync** — push any Digarr playlist to Spotify from the History menu; creates or updates the Spotify playlist; match count shown inline
-- **ListenBrainz recommendations** — Weekly Jams, Daily Jams, and Weekly Exploration feeds pulled from your ListenBrainz account; tracks you haven't been listening to, not just what's already owned
-- **Similar to Library** — uses your Last.fm API key to find artists similar to up to 75 randomly sampled artists in your Lidarr library; ranked by frequency across matches, owned artists filtered out
-- **Discogs Wantlist** — pulls every release from your Discogs wantlist via personal access token; one-click add artists to Lidarr
-- **Clean web UI** — dark, vinyl-inspired interface
+- **Artist blocklist** — permanently ignore specific artists across all imports and refreshes
+- **Authentication** — password login (bcrypt) and/or OIDC SSO (Authentik, Keycloak, etc.); both can be active simultaneously; 30-day sessions
 - **Multi-AI support** — Claude (Haiku/Sonnet/Opus) and OpenAI (GPT-4o mini/GPT-4o), switchable from Settings with per-provider model selection
+- **Clean web UI** — dark, vinyl-inspired interface
 
 ---
 
@@ -71,14 +72,8 @@ Upload an M3U file or drag-and-drop it. Digarr parses the `#EXTINF` tags directl
 ### Import from text
 Paste a raw list of artists or songs. Claude will figure out the structure.
 
-### Add to Lidarr
-After parsing, you get a table of artists with checkboxes. Select the ones you want, hit **Add to Lidarr**, and Digarr will:
-1. Check if the artist already exists in your library
-2. Search MusicBrainz for the artist
-3. Add them with your configured quality/metadata profile
-
-### Export M3U
-Any parsed playlist can be downloaded as an M3U file for use in other players.
+### Export M3U / JSPF
+Any parsed playlist can be downloaded as an M3U or JSPF file for use in other players.
 
 ---
 
@@ -98,18 +93,30 @@ All config is stored in the Settings UI and persisted to `/data/config.json` ins
 | Quality Profile | Which Lidarr quality profile to use for new artists |
 | Metadata Profile | Which Lidarr metadata profile to use |
 | Root Folder | Where Lidarr should store music |
+| Plex URL | Your Plex server URL (e.g. `http://192.168.1.x:32400`) |
+| Plex Token | Your Plex auth token |
+| Plex Library Section ID | The numeric ID of your Plex music library |
+| Plex Sync Interval | How often to auto-sync all Plex playlists (off through weekly) |
+| Append — Digarr to playlist names | Adds ` — Digarr` suffix to playlists in Plex (on by default) |
+| Delete from Plex on remove | When a playlist is deleted from Digarr, also delete it from Plex |
+| Jellyfin URL | Your Jellyfin server URL (e.g. `http://192.168.1.x:8096`) |
+| Jellyfin API Key | Generate one in Jellyfin → Dashboard → API Keys |
+| Jellyfin Sync Interval | How often to auto-sync all Jellyfin playlists (off through weekly) |
+| Append — Digarr (Jellyfin) | Adds ` — Digarr` suffix to playlists in Jellyfin |
+| Delete from Jellyfin on remove | When a playlist is deleted from Digarr, also delete it from Jellyfin |
+| Navidrome URL | Your Navidrome server URL (e.g. `http://192.168.1.x:4533`) |
+| Navidrome Username | Your Navidrome username |
+| Navidrome Password | Your Navidrome password |
+| Navidrome Sync Interval | How often to auto-sync all Navidrome playlists (off through weekly) |
+| Append — Digarr (Navidrome) | Adds ` — Digarr` suffix to playlists in Navidrome |
+| Delete from Navidrome on remove | When a playlist is deleted from Digarr, also delete it from Navidrome |
 | Spotify Client ID / Secret | Required for all Spotify features. Create a free app at developer.spotify.com → Dashboard → Create App |
 | Spotify OAuth Redirect URI | Must match what you register in your Spotify app. Set to `https://your-digarr-host/auth/spotify/callback`. After saving, click **Connect with Spotify** to authorize |
 | ListenBrainz Username | Your ListenBrainz username — enables Weekly Jams, Daily Jams, and Weekly Exploration feeds on the Discover page |
 | Last.fm API Key | Required for Similar to Library discovery. Get a free key at last.fm/api |
 | Discogs Username | Your Discogs username — required for Wantlist import on the Discover page |
 | Discogs Token | Your Discogs personal access token — generate one in Discogs → Settings → Developer |
-| Plex URL | Your Plex server URL (e.g. `http://192.168.1.x:32400`) |
-| Plex Token | Your Plex auth token |
-| Plex Library Section ID | The numeric ID of your Plex music library |
-| Append — Digarr to playlist names | Adds ` — Digarr` suffix to playlists created in Plex (on by default) |
-| Delete from Plex on remove | When a playlist is deleted from Digarr, also delete it from Plex (off by default) |
-| Refresh Interval | How often to auto-refresh all playlists (off / 6h / 12h / daily / weekly) |
+| Refresh Interval | How often to auto-refresh all playlists (off / 1h–bi-weekly) |
 | Webhook URL | Optional URL to POST a JSON summary after every scheduled refresh run |
 | Refresh Merge Tracks | When enabled, refreshes append new tracks instead of replacing the stored list |
 | Password | Set a login password directly in Settings → General. Stored as a bcrypt hash in `config.json`. |
@@ -231,38 +238,6 @@ digarr.yourdomain.com {
     reverse_proxy digarr:8090
 }
 ```
-
----
-
-## What's been built
-
-- **Import anything** — URL, M3U file, raw text paste, or Spotify playlist (your own playlists and Liked Songs via the Spotify tab)
-- **AI-powered parsing** — Claude or OpenAI extracts artists and tracks from unstructured content; confidence scores flag uncertain results
-- **Lidarr integration** — search, check library status, and add artists directly
-- **Track status** — green/yellow/red indicators show what's downloaded, monitored, or missing
-- **Manual track matching** — search your Plex library cache for unmatched tracks; matches persist across refreshes
-- **M3U / JSPF export** — download any parsed playlist in either format
-- **Plex integration** — push playlists to Plex; unmatched tracks trigger Lidarr monitoring; Sync All re-syncs everything in one shot; optional ` — Digarr` suffix; optional delete-on-remove
-- **Spotify integration** — OAuth (PKCE) for user playlists and Liked Songs; push any Digarr playlist to Spotify from History; two-way sync
-- **Playlist history** — every import saved with full track/artist detail; inline rename syncs to Plex atomically
-- **Background imports** — jobs run in the background with a live progress bar; navigate away without losing state
-- **Playlist refresh** — re-fetch any source URL, add net-new artists, re-sync Plex; merge mode appends instead of replacing
-- **Scheduled refresh** — auto-refresh on a configurable interval (6h / 12h / daily / weekly); per-playlist include/exclude; webhook fires after each run
-- **Discover page** — ListenBrainz recommendation feeds (Weekly Jams, Daily Jams, Weekly Exploration), Similar to Library via Last.fm, and Discogs Wantlist; all with library status badges and direct Lidarr/Plex import
-- **Wanted/missing report** — see which Lidarr artists added via Digarr still have undownloaded albums
-- **Artist blocklist** — permanently ignore specific artists across all imports and refreshes
-- **Authentication** — password login (bcrypt) and/or OIDC SSO (Authentik, Keycloak, etc.); both can be active simultaneously; 30-day sessions
-- **Rate limiting + input validation** — hardened for self-hosted, internet-facing use
-- **Multi-AI support** — Claude and OpenAI, switchable from Settings with per-provider model selection
-- **First-run onboarding** — setup checklist shown on Import until AI provider and Lidarr are configured
-
----
-
-## Features we're working on
-
-- **Jellyfin support** — playlist push, sync, track cache, and media server selector (Plex / Jellyfin / both)
-- **Downloader integration** — direct Deemix API support for queueing downloads outside Lidarr
-- **Shareable import links** — generate a link someone else can paste into their own Digarr instance
 
 ---
 

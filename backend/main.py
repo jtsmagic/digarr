@@ -651,11 +651,7 @@ async def _jellyfin_sync_all_job() -> dict:
             full = get_playlist(pl["id"])
             if not full or not full.get("tracks"):
                 continue
-            matched_ids, _, total = await jf.match_tracks(full["tracks"])
-            if len(matched_ids) <= (pl.get("jellyfin_matched_count") or 0):
-                continue
-            await jf.update_playlist(pl["jellyfin_playlist_id"], matched_ids)
-            update_playlist_jellyfin_result(pl["id"], pl["jellyfin_playlist_id"], len(matched_ids), total)
+            await _do_sync_jellyfin_playlist(full, jf, config)
             synced += 1
         except Exception as exc:
             logger.error("Jellyfin sync: error on '%s': %s", pl['name'], exc)
@@ -677,11 +673,7 @@ async def _navidrome_sync_all_job() -> dict:
             full = get_playlist(pl["id"])
             if not full or not full.get("tracks"):
                 continue
-            matched_ids, _, total = await nd.match_tracks(full["tracks"])
-            if len(matched_ids) <= (pl.get("navidrome_matched_count") or 0):
-                continue
-            await nd.update_playlist(pl["navidrome_playlist_id"], pl["name"], matched_ids)
-            update_playlist_navidrome_result(pl["id"], pl["navidrome_playlist_id"], len(matched_ids), total)
+            await _do_sync_navidrome_playlist(full, nd, config)
             synced += 1
         except Exception as exc:
             logger.error("Navidrome sync: error on '%s': %s", pl['name'], exc)
@@ -1615,13 +1607,21 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
     if pl.get("jellyfin_playlist_id") and config.get("jellyfin_url") and config.get("jellyfin_api_key"):
         try:
             jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
-            matched_ids, _, total = await jf.match_tracks(tracks_to_save)
+            cache_matched, live_tracks = [], []
+            for t in tracks_to_save:
+                cached = db_lookup_track_cache(t.get("artist", ""), t.get("title", ""), "jellyfin")
+                if cached:
+                    cache_matched.append(cached)
+                else:
+                    live_tracks.append(t)
+            live_matched, _, total = await jf.match_tracks(live_tracks)
+            total = len(tracks_to_save)
+            matched_ids = cache_matched + live_matched
             current_matched = pl.get("jellyfin_matched_count") or 0
             if tracks_changed or len(matched_ids) > current_matched:
-                jf_name = _jellyfin_playlist_name(pl["name"], config)
                 await jf.update_playlist(pl["jellyfin_playlist_id"], matched_ids)
                 update_playlist_jellyfin_result(playlist_id, pl["jellyfin_playlist_id"], len(matched_ids), total)
-                jellyfin_sync_result = {"matched": len(matched_ids), "total": total, "playlist_name": jf_name}
+                jellyfin_sync_result = {"matched": len(matched_ids), "total": total}
         except Exception as e:
             logger.error("Auto Jellyfin sync failed for playlist %s: %s", playlist_id, e)
 
@@ -1634,7 +1634,16 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                 config["navidrome_url"], config["navidrome_username"],
                 config.get("navidrome_password", ""),
             )
-            matched_ids, _, total = await nd.match_tracks(tracks_to_save)
+            cache_matched, live_tracks = [], []
+            for t in tracks_to_save:
+                cached = db_lookup_track_cache(t.get("artist", ""), t.get("title", ""), "navidrome")
+                if cached:
+                    cache_matched.append(cached)
+                else:
+                    live_tracks.append(t)
+            live_matched, _, _ = await nd.match_tracks(live_tracks)
+            total = len(tracks_to_save)
+            matched_ids = cache_matched + live_matched
             current_matched = pl.get("navidrome_matched_count") or 0
             if tracks_changed or len(matched_ids) > current_matched:
                 nd_name = _navidrome_playlist_name(pl["name"], config)
@@ -2327,19 +2336,22 @@ async def search_library(q: str, source: str = "plex", limit: int = 20):
     results = db_search_track_cache(q.strip(), source=source, limit=limit)
 
     if not results:
-        # Cache is empty or query didn't match — try a live search
         config = load_config()
-        if config.get("plex_url") and config.get("plex_token") and config.get("plex_library_section_id"):
-            try:
-                media_client = PlexMediaClient(
-                    config["plex_url"],
-                    config["plex_token"],
-                    config["plex_library_section_id"],
-                )
-                results = await media_client.search_tracks(q.strip(), limit=limit)
+        try:
+            if source == "jellyfin" and config.get("jellyfin_url") and config.get("jellyfin_api_key"):
+                client = JellyfinMediaClient(config["jellyfin_url"], config["jellyfin_api_key"])
+                results = await client.search_tracks(q.strip(), limit=limit)
                 return {"results": results, "source": "live"}
-            except Exception:
-                pass
+            elif source == "navidrome" and config.get("navidrome_url") and config.get("navidrome_username"):
+                client = NavidromeMediaClient(config["navidrome_url"], config["navidrome_username"], config.get("navidrome_password", ""))
+                results = await client.search_tracks(q.strip(), limit=limit)
+                return {"results": results, "source": "live"}
+            elif config.get("plex_url") and config.get("plex_token") and config.get("plex_library_section_id"):
+                client = PlexMediaClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
+                results = await client.search_tracks(q.strip(), limit=limit)
+                return {"results": results, "source": "live"}
+        except Exception:
+            pass
 
     return {"results": results, "source": "cache"}
 
