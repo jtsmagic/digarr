@@ -112,12 +112,10 @@ export default function Import() {
         include_in_refresh: includeInRefresh,
         sync_targets: [...syncTargets],
       });
-      // Reset form so user can start another import immediately
-      setParsed(null);
+      // Clear the form inputs so the user can start another import immediately,
+      // but keep parsed/trackStatuses visible below the queued notification.
       setContent('');
       setPlaylistName('');
-      setTrackStatuses({});
-      setLidarrExisting({});
       setSourceConflict(null);
       setBypassConflict(false);
       setQueuedJob({ job_id: res.data.job_id, playlist_id: res.data.playlist_id, name: name || 'Import' });
