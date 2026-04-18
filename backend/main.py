@@ -1252,7 +1252,15 @@ async def get_wanted_missing():
     digarr_artists = {normalize(n) for n in raw_names}
 
     client = make_lidarr_client(config)
-    data = await client.get_wanted_missing(page_size=200)
+    try:
+        data = await client.get_wanted_missing(page_size=200)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Lidarr timed out. It may be busy or unreachable.")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Lidarr returned {e.response.status_code}.")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Lidarr: {e}")
+
     records = data.get("records", [])
 
     albums = []
@@ -1269,7 +1277,6 @@ async def get_wanted_missing():
     return {
         "total": len(albums),
         "albums": albums,
-        # debug counts so the UI can show a helpful message if filtering is the issue
         "lidarr_total": data.get("totalRecords", len(records)),
         "digarr_artist_count": len(digarr_artists),
     }
