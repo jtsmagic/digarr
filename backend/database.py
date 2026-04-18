@@ -826,6 +826,13 @@ def db_load_recent_import_jobs() -> list[dict]:
     return [json.loads(row["job_json"]) for row in rows]
 
 
+def db_delete_import_job(job_id: str) -> None:
+    conn = get_db()
+    conn.execute("DELETE FROM import_jobs WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+
+
 def db_delete_import_jobs_for_playlist(playlist_id: int) -> None:
     conn = get_db()
     # import_jobs stores JSON blobs; filter by playlist_id stored in the JSON
