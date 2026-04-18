@@ -274,94 +274,6 @@ function SimilarToLibraryCard({ configured, syncProps = {} }) {
 }
 
 // ---------------------------------------------------------------------------
-// Discogs card
-// ---------------------------------------------------------------------------
-
-function DiscogsCard({ configured, syncProps = {} }) {
-  const [syncTargets, setSyncTargets] = useState(new Set(['plex', 'spotify']));
-  const [loading, setLoading]   = useState(false);
-  const [fetchError, setFetchError] = useState(null);
-  const [results, setResults]   = useState(null);
-  const [lidarrStatus, setLidarrStatus] = useState({});
-  const [selected, setSelected] = useState(new Set());
-  const [nameOverride, setNameOverride] = useState('');
-  const { importing, importedJob, error: importError, startImport } = useImport();
-
-  const fetch = useCallback(async () => {
-    setLoading(true);
-    setFetchError(null);
-    setResults(null);
-    setLidarrStatus({});
-    setSelected(new Set());
-    setNameOverride('');
-    try {
-      const r = await axios.get('/api/discover/discogs/wantlist');
-      setResults(r.data);
-      setSelected(new Set(r.data.tracks.map((_, i) => i)));
-      const artists = [...new Set(r.data.tracks.map(t => t.artist))];
-      if (artists.length) {
-        axios.post('/api/lidarr/check-artists', { artists })
-          .then(res => setLidarrStatus(res.data.results || {}))
-          .catch(() => {});
-      }
-    } catch (e) {
-      setFetchError(e.response?.data?.detail || 'Failed to fetch wantlist.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const toggle = i => setSelected(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; });
-  const toggleAll = () => setSelected(prev => prev.size === results.tracks.length ? new Set() : new Set(results.tracks.map((_, i) => i)));
-
-  const handleImport = () => {
-    if (!results || selected.size === 0) return;
-    const picked = results.tracks.filter((_, i) => selected.has(i));
-    const seen = new Set();
-    const artists = [];
-    for (const t of picked) { if (!seen.has(t.artist)) { seen.add(t.artist); artists.push({ name: t.artist }); } }
-    startImport({ artists, tracks: picked, name: nameOverride.trim() || results.name, sourceUrl: 'discogs:wantlist', sourceType: 'discogs', syncTargets });
-  };
-
-  if (!configured) return (
-    <div className="card">
-      <div className="card-title">Discogs Wantlist</div>
-      <p className="text-muted" style={{ fontSize: 13 }}>Set your Discogs username and token in <Link to="/settings" style={{ color: 'var(--accent)' }}>Settings</Link>.</p>
-    </div>
-  );
-
-  return (
-    <div className="card">
-      <div className="card-title">Discogs Wantlist</div>
-      <div style={{ marginBottom: '1rem' }}>
-        <button className="btn btn-primary" onClick={fetch} disabled={loading}>
-          {loading ? 'Digging…' : 'Dig Wantlist'}
-        </button>
-      </div>
-      {(fetchError || importError) && <div className="error-box" style={{ marginBottom: '1rem' }}>{fetchError || importError}</div>}
-      {results && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{results.tracks.length} releases</span>
-            <button className="btn btn-sm btn-ghost" onClick={toggleAll} style={{ fontSize: 11, padding: '2px 8px' }}>
-              {selected.size === results.tracks.length ? 'Deselect all' : 'Select all'}
-            </button>
-          </div>
-          <TrackTable tracks={results.tracks} selected={selected} onToggle={toggle} lidarrStatus={lidarrStatus}
-            titleLabel="Release" artistLabel="Artist" showAlbum={false} />
-          {importedJob ? <ImportedBanner name={importedJob.name} /> : (
-            <ImportBar name={nameOverride} placeholder={results.name} onNameChange={setNameOverride}
-              onImport={handleImport} importing={importing} count={selected.size} unit="release"
-              syncTargets={syncTargets} onSyncTargetChange={(id, checked) => setSyncTargets(prev => { const s = new Set(prev); checked ? s.add(id) : s.delete(id); return s; })}
-              {...syncProps} />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Shared table / import bar sub-components
 // ---------------------------------------------------------------------------
 
@@ -440,7 +352,6 @@ export default function Discover() {
 
   const lbConfigured      = !!(config?.listenbrainz_username);
   const similarConfigured = !!(config?.lastfm_api_key && config?.lidarr_url && config?.lidarr_api_key);
-  const discogsConfigured = !!(config?.discogs_username && config?.discogs_token);
   const plexConfigured    = !!(config?.plex_url && config?.plex_token && config?.plex_library_section_id);
 
   const syncProps = { plexConfigured, spotifyConfigured: spotifyConnected };
@@ -461,7 +372,6 @@ export default function Discover() {
         <>
           <ListenBrainzCard configured={lbConfigured} syncProps={syncProps} />
           <SimilarToLibraryCard configured={similarConfigured} syncProps={syncProps} />
-          <DiscogsCard configured={discogsConfigured} syncProps={syncProps} />
         </>
       ) : (
         <div className="card">

@@ -697,7 +697,7 @@ export default function History() {
             const navidromeSync = navidromeSyncStates[pl.id] || {};
             const refresh = refreshStates[pl.id] || {};
             const spotifyPush = spotifyPushStates[pl.id] || {};
-            const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs', 'spotify'].includes(pl.source_type);
+            const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'spotify'].includes(pl.source_type);
             const activeJob = importJobs.find(j => j.playlist_id === pl.id && (j.status === 'queued' || j.status === 'running'));
             return (
               <div key={pl.id} className="card">
@@ -1253,7 +1253,7 @@ export default function History() {
                       );
                     })()}
 
-                    {pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs'].includes(pl.source_type) && (() => {
+                    {pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar'].includes(pl.source_type) && (() => {
                       const effective = pl.merge_tracks !== null && pl.merge_tracks !== undefined ? !!pl.merge_tracks : globalMerge;
                       return (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
