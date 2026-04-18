@@ -223,12 +223,23 @@ async def auth_middleware(request: Request, call_next):
 async def startup():
     init_db()
     db_prune_expired_sessions()
-    # Recover persisted jobs; drop any that were mid-flight (unrecoverable)
+    # Recover persisted jobs; drop mid-flight ones (unrecoverable) and stale done/error ones
+    from datetime import timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
     for job in db_load_recent_import_jobs():
         if job["status"] in ("running", "queued"):
             db_delete_import_job(job["id"])
         else:
-            _jobs[job["id"]] = job
+            try:
+                created = datetime.fromisoformat(job["created_at"].replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+            except Exception:
+                created = cutoff  # treat unparseable as stale
+            if created >= cutoff:
+                _jobs[job["id"]] = job
+            else:
+                db_delete_import_job(job["id"])
     config = load_config()
     _reschedule(int(config.get("refresh_interval_hours") or 0))
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
