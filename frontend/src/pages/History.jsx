@@ -15,8 +15,12 @@ export default function History() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [syncStates, setSyncStates] = useState({});  // { [id]: { loading, result, error } }
+  const [jellyfinSyncStates, setJellyfinSyncStates] = useState({});
+  const [navidromeSyncStates, setNavidromeSyncStates] = useState({});
   const [spotifyPushStates, setSpotifyPushStates] = useState({});  // { [id]: { loading, result, error } }
   const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
+  const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [refreshStates, setRefreshStates] = useState({});  // { [id]: { loading, result, error } }
   const [syncAllLoading, setSyncAllLoading] = useState(false);
   const [syncAllResult, setSyncAllResult] = useState(null);
@@ -59,6 +63,8 @@ export default function History() {
 
   useEffect(() => {
     axios.get('/api/spotify/status').then(r => setSpotifyConnected(r.data.connected)).catch(() => {});
+    axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
+    axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
@@ -249,6 +255,34 @@ export default function History() {
     }
   };
 
+  const handleSyncJellyfin = async (e, pl) => {
+    e.stopPropagation();
+    setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
+    try {
+      const res = await axios.post(`/api/jellyfin/playlist/${pl.id}/sync`);
+      setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
+      setPlaylists(prev => prev.map(p =>
+        p.id === pl.id ? { ...p, jellyfin_playlist_id: res.data.jellyfin_playlist_id, jellyfin_matched_count: res.data.matched, jellyfin_total_count: res.data.total } : p
+      ));
+    } catch (err) {
+      setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Jellyfin sync failed.' } }));
+    }
+  };
+
+  const handleSyncNavidrome = async (e, pl) => {
+    e.stopPropagation();
+    setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
+    try {
+      const res = await axios.post(`/api/navidrome/playlist/${pl.id}/sync`);
+      setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
+      setPlaylists(prev => prev.map(p =>
+        p.id === pl.id ? { ...p, navidrome_playlist_id: res.data.navidrome_playlist_id, navidrome_matched_count: res.data.matched, navidrome_total_count: res.data.total } : p
+      ));
+    } catch (err) {
+      setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Navidrome sync failed.' } }));
+    }
+  };
+
   const handleRefresh = async (e, pl) => {
     e.stopPropagation();
     if (confirmRefresh !== pl.id) {
@@ -260,11 +294,12 @@ export default function History() {
     try {
       const res = await axios.post(`/api/playlists/${pl.id}/refresh`);
 
-      // Use the backend's auto-sync result if it fired (only fires when matched count grew)
-      let plexUpdate = {};
+      // Use the backend's auto-sync results if they fired (only fires when matched count grew)
+      let mediaUpdate = {};
       const ps = res.data.plex_sync;
       if (ps) {
-        plexUpdate = {
+        mediaUpdate = {
+          ...mediaUpdate,
           plex_playlist_id: ps.plex_playlist_id ?? pl.plex_playlist_id,
           plex_matched_count: ps.matched,
           plex_total_count: ps.total,
@@ -272,11 +307,21 @@ export default function History() {
         };
         setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ps, error: null } }));
       }
+      const js = res.data.jellyfin_sync;
+      if (js) {
+        mediaUpdate = { ...mediaUpdate, jellyfin_matched_count: js.matched, jellyfin_total_count: js.total };
+        setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: js, error: null } }));
+      }
+      const ns = res.data.navidrome_sync;
+      if (ns) {
+        mediaUpdate = { ...mediaUpdate, navidrome_matched_count: ns.matched, navidrome_total_count: ns.total };
+        setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ns, error: null } }));
+      }
 
       setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
       setPlaylists(prev => prev.map(p =>
         p.id === pl.id
-          ? { ...p, last_refreshed_at: new Date().toISOString(), ...plexUpdate }
+          ? { ...p, last_refreshed_at: new Date().toISOString(), ...mediaUpdate }
           : p
       ));
     } catch (err) {
@@ -554,6 +599,8 @@ export default function History() {
         <div style={{ display: 'grid', gap: '1rem' }}>
           {playlists.map(pl => {
             const sync = syncStates[pl.id] || {};
+            const jellyfinSync = jellyfinSyncStates[pl.id] || {};
+            const navidromeSync = navidromeSyncStates[pl.id] || {};
             const refresh = refreshStates[pl.id] || {};
             const spotifyPush = spotifyPushStates[pl.id] || {};
             const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs', 'spotify'].includes(pl.source_type);
@@ -639,6 +686,26 @@ export default function History() {
                           : 'In Plex'}
                       </span>
                     )}
+                    {pl.jellyfin_playlist_id && (
+                      <span className="badge" style={{ background: '#00a4dc', color: '#fff', fontSize: 10, cursor: 'default' }}
+                        title={pl.jellyfin_matched_count != null
+                          ? `${pl.jellyfin_matched_count} of ${pl.jellyfin_total_count} tracks matched in Jellyfin`
+                          : 'Playlist exists in Jellyfin'}>
+                        {pl.jellyfin_matched_count != null
+                          ? `Jellyfin: ${pl.jellyfin_matched_count}/${pl.jellyfin_total_count}`
+                          : 'In Jellyfin'}
+                      </span>
+                    )}
+                    {pl.navidrome_playlist_id && (
+                      <span className="badge" style={{ background: '#fc6e51', color: '#fff', fontSize: 10, cursor: 'default' }}
+                        title={pl.navidrome_matched_count != null
+                          ? `${pl.navidrome_matched_count} of ${pl.navidrome_total_count} tracks matched in Navidrome`
+                          : 'Playlist exists in Navidrome'}>
+                        {pl.navidrome_matched_count != null
+                          ? `Navidrome: ${pl.navidrome_matched_count}/${pl.navidrome_total_count}`
+                          : 'In Navidrome'}
+                      </span>
+                    )}
 
                     {confirmDelete === pl.id ? (
                       /* Delete confirmation — replaces all other actions */
@@ -708,6 +775,24 @@ export default function History() {
                         )}
                         {spotifyPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{spotifyPush.error}</span>}
 
+                        {/* Jellyfin inline feedback */}
+                        {jellyfinSync.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Syncing Jellyfin…</span>}
+                        {jellyfinSync.result && (
+                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
+                            Jellyfin: {jellyfinSync.result.matched}/{jellyfinSync.result.total} matched
+                          </span>
+                        )}
+                        {jellyfinSync.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{jellyfinSync.error}</span>}
+
+                        {/* Navidrome inline feedback */}
+                        {navidromeSync.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Syncing Navidrome…</span>}
+                        {navidromeSync.result && (
+                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
+                            Navidrome: {navidromeSync.result.matched}/{navidromeSync.result.total} matched
+                          </span>
+                        )}
+                        {navidromeSync.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{navidromeSync.error}</span>}
+
                         {/* Overflow menu — M3U download + Delete */}
                         <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
                           <button className="btn btn-ghost" style={{ fontSize: 13, padding: '2px 8px', lineHeight: 1 }}
@@ -747,6 +832,30 @@ export default function History() {
                                     onMouseLeave={e => e.currentTarget.style.background = 'none'}
                                     onClick={() => { setMenuOpenId(null); handlePushToSpotify(pl); }}>
                                     {pl.spotify_playlist_id ? '⟳ Sync to Spotify' : '▶ Push to Spotify'}
+                                  </button>
+                                </>
+                              )}
+                              {jellyfinConfigured && (
+                                <>
+                                  <div style={{ height: 1, background: 'var(--border)', margin: '0 8px' }} />
+                                  <button
+                                    style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', padding: '8px 14px', fontSize: 12, cursor: 'pointer' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                                    onClick={e => { setMenuOpenId(null); handleSyncJellyfin(e, pl); }}>
+                                    {pl.jellyfin_playlist_id ? '⟳ Sync to Jellyfin' : '▶ Push to Jellyfin'}
+                                  </button>
+                                </>
+                              )}
+                              {navidromeConfigured && (
+                                <>
+                                  <div style={{ height: 1, background: 'var(--border)', margin: '0 8px' }} />
+                                  <button
+                                    style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', padding: '8px 14px', fontSize: 12, cursor: 'pointer' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                                    onClick={e => { setMenuOpenId(null); handleSyncNavidrome(e, pl); }}>
+                                    {pl.navidrome_playlist_id ? '⟳ Sync to Navidrome' : '▶ Push to Navidrome'}
                                   </button>
                                 </>
                               )}

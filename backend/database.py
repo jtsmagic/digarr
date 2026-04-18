@@ -167,6 +167,12 @@ def init_db():
         ("spotify_matched_count", "INTEGER"),
         ("spotify_total_count", "INTEGER"),
         ("merge_tracks", "INTEGER"),
+        ("jellyfin_playlist_id", "TEXT"),
+        ("jellyfin_matched_count", "INTEGER"),
+        ("jellyfin_total_count", "INTEGER"),
+        ("navidrome_playlist_id", "TEXT"),
+        ("navidrome_matched_count", "INTEGER"),
+        ("navidrome_total_count", "INTEGER"),
     ]:
         try:
             c.execute(f"ALTER TABLE playlists ADD COLUMN {col} {typedef}")
@@ -300,7 +306,9 @@ def get_playlists() -> list:
     c.execute("""SELECT id, name, source_url, source_type, created_at, artists_added,
                         plex_playlist_id, plex_matched_count, plex_total_count,
                         plex_unmatched_tracks, last_refreshed_at, plex_playlist_name,
-                        lidarr_results, spotify_playlist_id, spotify_matched_count, spotify_total_count
+                        lidarr_results, spotify_playlist_id, spotify_matched_count, spotify_total_count,
+                        jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
+                        navidrome_playlist_id, navidrome_matched_count, navidrome_total_count
                  FROM playlists ORDER BY created_at DESC""")
     rows = c.fetchall()
     conn.close()
@@ -356,6 +364,38 @@ def update_playlist_spotify_result(
     c.execute(
         "UPDATE playlists SET spotify_playlist_id = ?, spotify_matched_count = ?, spotify_total_count = ? WHERE id = ?",
         (spotify_playlist_id, matched_count, total_count, playlist_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_playlist_jellyfin_result(
+    playlist_id: int,
+    jellyfin_playlist_id: str,
+    matched_count: int,
+    total_count: int,
+) -> None:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE playlists SET jellyfin_playlist_id = ?, jellyfin_matched_count = ?, jellyfin_total_count = ? WHERE id = ?",
+        (jellyfin_playlist_id, matched_count, total_count, playlist_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_playlist_navidrome_result(
+    playlist_id: int,
+    navidrome_playlist_id: str,
+    matched_count: int,
+    total_count: int,
+) -> None:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE playlists SET navidrome_playlist_id = ?, navidrome_matched_count = ?, navidrome_total_count = ? WHERE id = ?",
+        (navidrome_playlist_id, matched_count, total_count, playlist_id),
     )
     conn.commit()
     conn.close()
