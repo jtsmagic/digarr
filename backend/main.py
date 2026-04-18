@@ -104,6 +104,7 @@ from database import (
     db_prune_expired_sessions, save_oauth_state, consume_oauth_state,
     db_save_import_job, db_load_recent_import_jobs, db_prune_import_jobs,
     update_playlist_deemix_result, update_playlist_slskd_result,
+    db_increment_stat, db_set_stat_text, db_set_stat_text_if_unset, db_get_all_stats,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -590,6 +591,8 @@ async def _refresh_all_playlists_job() -> dict:
             logger.error("Scheduler: error refreshing '%s': %s", pl['name'], msg)
     last_run = datetime.utcnow().isoformat()
     save_config({**config, "refresh_last_run": last_run, "refresh_last_run_summary": summary})
+    db_increment_stat("refresh_runs_total")
+    db_increment_stat("artists_added_via_refresh_total", total_new_artists)
     webhook_url = config.get("webhook_url", "")
     if webhook_url:
         changes_only = config.get("refresh_webhook_on_changes_only", False)
@@ -892,6 +895,31 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     try:
         added = [r["artist"] for r in results if r.get("status") == "added"]
         update_playlist_import_results(playlist_id, added, results)
+
+        # --- stats ---
+        now_iso = datetime.utcnow().isoformat()
+        db_set_stat_text_if_unset("first_import_at", now_iso)
+        db_set_stat_text("last_import_at", now_iso)
+        db_increment_stat("playlists_created_total")
+        db_increment_stat("artists_parsed_total", len(req.artists))
+        db_increment_stat("tracks_parsed_total", len(req.tracks))
+        db_increment_stat(f"imports_by_source_{req.source_type}")
+        db_increment_stat(f"imports_by_ai_{config.get('active_ai_provider', 'claude')}")
+        if added:
+            db_increment_stat("artists_added_to_lidarr_total", len(added))
+        if job.get("plex_result"):
+            db_increment_stat("plex_tracks_matched_total", job["plex_result"].get("matched", 0))
+        if job.get("jellyfin_result"):
+            db_increment_stat("jellyfin_tracks_matched_total", job["jellyfin_result"].get("matched", 0))
+        if job.get("navidrome_result"):
+            db_increment_stat("navidrome_tracks_matched_total", job["navidrome_result"].get("matched", 0))
+        if job.get("spotify_result"):
+            db_increment_stat("spotify_tracks_matched_total", job["spotify_result"].get("matched", 0))
+        if job.get("deemix_result"):
+            db_increment_stat("deemix_tracks_queued_total", job["deemix_result"].get("queued", 0))
+        if job.get("slskd_result"):
+            db_increment_stat("slskd_tracks_queued_total", job["slskd_result"].get("queued", 0))
+            db_increment_stat("slskd_tracks_flagged_total", job["slskd_result"].get("flagged", 0))
 
         if config.get("playlist_export_path"):
             export_playlist_to_path(job["playlist_name"], req.tracks, config["playlist_export_path"])
@@ -1238,6 +1266,12 @@ async def get_profiles():
     metadata = await client.get_metadata_profiles()
     root_folders = await client.get_root_folders()
     return {"quality_profiles": quality, "metadata_profiles": metadata, "root_folders": root_folders}
+
+@app.get("/api/stats", include_in_schema=False)
+def get_stats():
+    """Hidden endpoint — not linked in the UI. Tracks cumulative usage stats for future use."""
+    return db_get_all_stats()
+
 
 @app.get("/api/lidarr/wanted")
 async def get_wanted_missing():

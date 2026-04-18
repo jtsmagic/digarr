@@ -134,4 +134,9 @@ async def lookup_track(artist: str, title: str) -> dict:
             "MusicBrainz enriched %r / %r → canonical_artist=%r album=%r",
             artist, title, result.get("canonical_artist"), result.get("album"),
         )
+        try:
+            from database import db_increment_stat
+            db_increment_stat("mb_enrichments_total")
+        except Exception:
+            pass
     return result
