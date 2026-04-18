@@ -150,6 +150,15 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS stats (
+            key        TEXT PRIMARY KEY,
+            value_int  INTEGER NOT NULL DEFAULT 0,
+            value_text TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
     try:
         c.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
     except Exception:
@@ -863,6 +872,67 @@ def update_playlist_slskd_result(
     )
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Stats — hidden key/value counters for future feature use
+# ---------------------------------------------------------------------------
+
+def db_increment_stat(key: str, amount: int = 1) -> None:
+    """Atomically increment an integer stat counter. Creates the key if it doesn't exist."""
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO stats (key, value_int, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+               value_int  = value_int + excluded.value_int,
+               updated_at = excluded.updated_at""",
+        (key, amount, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_set_stat_text(key: str, value: str) -> None:
+    """Set or update a text stat (e.g. a timestamp or label)."""
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO stats (key, value_int, value_text, updated_at)
+           VALUES (?, 0, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+               value_text = excluded.value_text,
+               updated_at = excluded.updated_at""",
+        (key, value, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_set_stat_text_if_unset(key: str, value: str) -> None:
+    """Set a text stat only if it hasn't been set before (e.g. first_import_at)."""
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    conn.execute(
+        """INSERT OR IGNORE INTO stats (key, value_int, value_text, updated_at)
+           VALUES (?, 0, ?, ?)""",
+        (key, value, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_all_stats() -> dict:
+    """Return all stats as a flat dict: {key: int or text}."""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT key, value_int, value_text FROM stats").fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        result[row["key"]] = row["value_text"] if row["value_text"] is not None else row["value_int"]
+    return result
 
 
 def db_prune_import_jobs() -> None:
