@@ -736,32 +736,6 @@ export default function Settings() {
         </>}
       </div>
 
-      {/* Discogs */}
-      <div className="card">
-        <SectionTitle sectionKey="discogs">Discogs <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}>optional — Discover page</span></SectionTitle>
-        {openSections.has('discogs') && <>
-          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Import your Discogs wantlist on the Discover page. Go to{' '}
-            <a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>discogs.com/settings/developers</a>{' '}
-            and scroll down to click <strong>Generate Token</strong> — ignore the consumer key/secret, those are for OAuth apps.
-          </p>
-          <div className="grid-2">
-            <div className="field">
-              <label>Username</label>
-              <input value={config.discogs_username || ''}
-                onChange={e => handleChange('discogs_username', e.target.value)}
-                placeholder="your Discogs username" />
-            </div>
-            <div className="field">
-              <label>Personal Access Token</label>
-              <input type="password" value={config.discogs_token || ''}
-                onChange={e => handleChange('discogs_token', e.target.value)}
-                placeholder="Discogs personal access token" />
-            </div>
-          </div>
-        </>}
-      </div>
-
       {/* Plex */}
       <div className="card">
         <SectionTitle sectionKey="plex">Plex</SectionTitle>

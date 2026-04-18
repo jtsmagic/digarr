@@ -118,7 +118,6 @@ from spotify import (
 )
 from listenbrainz import get_recommendation_playlist as lb_recommendation
 from lastfm import get_similar_artists as lfm_get_similar_artists
-from discogs import get_wantlist as discogs_get_wantlist
 from utils import deduplicate_artists, normalize
 import httpx
 
@@ -570,7 +569,7 @@ async def _refresh_all_playlists_job() -> dict:
     refreshable = [
         pl for pl in playlists
         if pl.get("source_url")
-        and pl.get("source_type") in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify")
+        and pl.get("source_type") in ("url", "m3u_url", "listenbrainz", "similar", "spotify")
         and pl["id"] not in excluded
     ]
     delay = int(config.get("refresh_delay_between_playlists") or 0)
@@ -1537,7 +1536,7 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
     source_url = pl.get("source_url")
     source_type = pl.get("source_type")
 
-    if not source_url or source_type not in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify"):
+    if not source_url or source_type not in ("url", "m3u_url", "listenbrainz", "similar", "spotify"):
         raise ValueError("No refreshable source URL")
 
     new_artists_dicts = []
@@ -1562,15 +1561,6 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
         all_lidarr = await make_lidarr_client(config).get_all_artists()
         artist_names = [a.get("artistName", "") for a in all_lidarr if a.get("artistName")]
         data = await _compute_similar_to_library(api_key, artist_names)
-        new_artists_dicts = data["artists"]
-        new_tracks = data["tracks"]
-
-    elif source_type == "discogs":
-        token = config.get("discogs_token", "").strip()
-        username = config.get("discogs_username", "").strip()
-        if not token or not username:
-            raise ValueError("Discogs username and token required. Add them in Settings.")
-        data = await discogs_get_wantlist(token, username)
         new_artists_dicts = data["artists"]
         new_tracks = data["tracks"]
 
@@ -2770,22 +2760,6 @@ async def discover_similar_to_library():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Similar artist lookup failed: {e}")
 
-
-@app.get("/api/discover/discogs/wantlist")
-async def discover_discogs_wantlist():
-    config = load_config()
-    token    = config.get("discogs_token", "").strip()
-    username = config.get("discogs_username", "").strip()
-    if not token or not username:
-        raise HTTPException(status_code=400, detail="Discogs username and token required. Add them in Settings.")
-    try:
-        return await discogs_get_wantlist(token, username)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=400, detail=f"Discogs user '{username}' not found.")
-        if e.response.status_code == 401:
-            raise HTTPException(status_code=400, detail="Discogs token invalid. Check your token in Settings.")
-        raise HTTPException(status_code=400, detail=f"Discogs API error ({e.response.status_code})")
 
 
 if __name__ == "__main__":
