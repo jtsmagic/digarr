@@ -7,6 +7,7 @@ const INPUT_TYPES = [
   { id: 'text', label: 'Text / Paste', placeholder: 'Paste a song list, tracklist, artist list, blog excerpt...' },
   { id: 'file', label: 'M3U File', placeholder: null },
   { id: 'spotify', label: 'Spotify', placeholder: null },
+  { id: 'deemix', label: 'Deezer', placeholder: null },
 ];
 
 export default function Import() {
@@ -307,7 +308,10 @@ export default function Import() {
 
       {/* Input Type Tabs */}
       <div className="tabs">
-        {INPUT_TYPES.filter(t => t.id !== 'spotify' || spotifyConfigured).map(t => (
+        {INPUT_TYPES.filter(t =>
+          (t.id !== 'spotify' || spotifyConfigured) &&
+          (t.id !== 'deemix' || deemixConfigured)
+        ).map(t => (
           <button key={t.id} className={`tab ${inputType === t.id ? 'active' : ''}`}
             onClick={() => { setInputType(t.id); setContent(''); resetState(); }}>
             {t.label}
@@ -340,6 +344,14 @@ export default function Import() {
           slskdConfigured={slskdConfigured}
           onQueued={setQueuedJob}
         />
+      ) : inputType === 'deemix' ? (
+        <DeemixImportTab
+          plexConfigured={plexConfigured}
+          jellyfinConfigured={jellyfinConfigured}
+          navidromeConfigured={navidromeConfigured}
+          slskdConfigured={slskdConfigured}
+          onQueued={setQueuedJob}
+        />
       ) : (
         <div className="field">
           <label>{INPUT_TYPES.find(t => t.id === inputType)?.label}</label>
@@ -368,8 +380,8 @@ export default function Import() {
         </div>
       )}
 
-      {/* Sync targets — only shown when 2+ are configured, not needed for Spotify tab (handled internally) */}
-      {inputType !== 'spotify' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 2 && (
+      {/* Sync targets — only shown when 2+ are configured, not needed for Spotify/Deemix tabs (handled internally) */}
+      {inputType !== 'spotify' && inputType !== 'deemix' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 2 && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
           {[
@@ -394,7 +406,7 @@ export default function Import() {
         </div>
       )}
 
-      {inputType !== 'spotify' && sourceConflict && (
+      {inputType !== 'spotify' && inputType !== 'deemix' && sourceConflict && (
         <div className="alert alert-info mt-2" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, marginBottom: '0.3rem' }}>Already imported</div>
@@ -417,13 +429,13 @@ export default function Import() {
         </div>
       )}
 
-      {inputType !== 'file' && inputType !== 'spotify' && (
+      {inputType !== 'file' && inputType !== 'spotify' && inputType !== 'deemix' && (
         <button className="btn btn-primary" onClick={handleParse} disabled={loading || !content}>
           {loading ? <><span className="spinner" /> {parseStatus || 'Parsing…'}</> : "Let's Dig It!"}
         </button>
       )}
 
-      {inputType !== 'spotify' && error && <div className="alert alert-error mt-2">{error}</div>}
+      {inputType !== 'spotify' && inputType !== 'deemix' && error && <div className="alert alert-error mt-2">{error}</div>}
 
       {parseUsage && !loading && (
         <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: '0.4rem', textAlign: 'right' }}>
@@ -805,6 +817,209 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
                     { id: 'deemix', label: 'Deemix', show: deemixConfigured },
+                    { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
+                  ].filter(t => t.show).map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={syncTargets.has(id)}
+                        onChange={e => setSyncTargets(prev => {
+                          const s = new Set(prev);
+                          e.target.checked ? s.add(id) : s.delete(id);
+                          localStorage.setItem('syncTargets', JSON.stringify([...s]));
+                          return s;
+                        })} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              <button className="btn btn-primary" onClick={handleImport} disabled={importing || selected.size === 0}>
+                {importing ? 'Importing…' : `Import ${selected.size} track${selected.size !== 1 ? 's' : ''} as Playlist`}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deemix / Deezer import tab
+// ---------------------------------------------------------------------------
+
+function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigured, slskdConfigured, onQueued }) {
+  const [playlists, setPlaylists] = useState(null);
+  const [listsLoading, setListsLoading] = useState(false);
+  const [selectedPlaylist, setSelectedPlaylist] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState(null);
+  const [playlistName, setPlaylistName] = useState('');
+  const [selected, setSelected] = useState(new Set());
+  const [error, setError] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [syncTargets, setSyncTargets] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('syncTargets')) || ['plex']); }
+    catch { return new Set(['plex']); }
+  });
+  const [includeInRefresh, setIncludeInRefresh] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setListsLoading(true);
+      try {
+        const r = await axios.get('/api/deemix/playlists');
+        const all = r.data.playlists || [];
+        setPlaylists(all);
+        if (all.length) setSelectedPlaylist(all[0].id);
+      } catch (e) {
+        setError(e.response?.data?.detail || 'Failed to load playlists. Make sure you are logged into Deezer in your Deemix instance.');
+      } finally {
+        setListsLoading(false);
+      }
+    })();
+  }, []);
+
+  const fetchTracks = useCallback(async () => {
+    if (!selectedPlaylist) return;
+    setLoading(true);
+    setResults(null);
+    setSelected(new Set());
+    setError(null);
+    try {
+      const r = await axios.get(`/api/deemix/playlist/${selectedPlaylist}`);
+      setResults(r.data);
+      setSelected(new Set(r.data.tracks.map((_, i) => i)));
+      const pl = playlists?.find(p => p.id === selectedPlaylist);
+      if (!playlistName && pl) setPlaylistName(pl.name);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Failed to fetch playlist.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedPlaylist, playlistName, playlists]);
+
+  const toggle = i => setSelected(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; });
+  const toggleAll = () => setSelected(prev =>
+    prev.size === results?.tracks.length ? new Set() : new Set(results.tracks.map((_, i) => i))
+  );
+
+  const handleImport = async () => {
+    if (!results || selected.size === 0) return;
+    const picked = results.tracks.filter((_, i) => selected.has(i));
+    const seen = new Set();
+    const artists = [];
+    for (const t of picked) {
+      if (t.artist && !seen.has(t.artist)) { seen.add(t.artist); artists.push({ name: t.artist }); }
+    }
+    const name = playlistName.trim() || playlists?.find(p => p.id === selectedPlaylist)?.name || 'Deezer Import';
+    setImporting(true);
+    setError(null);
+    try {
+      const res = await axios.post('/api/import/start', {
+        artists,
+        tracks: picked,
+        playlist_name: name,
+        source_url: `https://www.deezer.com/playlist/${selectedPlaylist}`,
+        source_type: 'deemix',
+        include_in_refresh: includeInRefresh,
+        sync_targets: [...syncTargets],
+      });
+      onQueued({ job_id: res.data.job_id, playlist_id: res.data.playlist_id, name });
+      setResults(null);
+      setSelected(new Set());
+      setPlaylistName('');
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Failed to queue import.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (listsLoading) return <p className="text-muted" style={{ fontSize: 13, marginTop: '0.5rem' }}>Loading playlists…</p>;
+
+  return (
+    <div style={{ marginTop: '0.5rem' }}>
+      {error && <div className="alert alert-error mt-2" style={{ marginBottom: '1rem' }}>{error}</div>}
+
+      {playlists && playlists.length === 0 && (
+        <p className="text-muted" style={{ fontSize: 13 }}>No playlists found. Make sure you are logged into Deezer in your Deemix instance.</p>
+      )}
+
+      {playlists && playlists.length > 0 && (
+        <>
+          <div className="field">
+            <label>Playlist Name</label>
+            <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
+              placeholder="My Deezer Playlist (optional)" />
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap' }}>
+            <div className="field" style={{ margin: 0, flex: '1 1 200px' }}>
+              <label>Playlist</label>
+              <select value={selectedPlaylist} onChange={e => { setSelectedPlaylist(e.target.value); setResults(null); }}>
+                {playlists.map(p => <option key={p.id} value={p.id}>{p.name}{p.nb_tracks ? ` (${p.nb_tracks})` : ''}</option>)}
+              </select>
+            </div>
+            <button className="btn btn-primary" onClick={fetchTracks} disabled={loading || !selectedPlaylist} style={{ flexShrink: 0 }}>
+              {loading ? 'Loading…' : 'Load Tracks'}
+            </button>
+          </div>
+
+          {results && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{results.tracks.length} tracks</span>
+                <button className="btn btn-ghost" onClick={toggleAll} style={{ fontSize: 11, padding: '2px 8px' }}>
+                  {selected.size === results.tracks.length ? 'Deselect all' : 'Select all'}
+                </button>
+              </div>
+
+              <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ width: 32, padding: '6px 8px' }}></th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 500 }}>Track</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 500 }}>Artist</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 500 }}>Album</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.tracks.map((t, i) => (
+                      <tr key={i} onClick={() => toggle(i)}
+                        style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: selected.has(i) ? 1 : 0.4 }}>
+                        <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                          <input type="checkbox" checked={selected.has(i)} readOnly style={{ cursor: 'pointer' }} />
+                        </td>
+                        <td style={{ padding: '6px 8px' }}>{t.title}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>{t.artist}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--text-dim)', fontSize: 11 }}>{t.album}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', marginBottom: '0.5rem' }}
+                onClick={() => setIncludeInRefresh(v => !v)}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 18, height: 18, flexShrink: 0, fontSize: 14, fontWeight: 700,
+                  color: includeInRefresh ? 'var(--green)' : 'var(--text-muted)',
+                }}>
+                  {includeInRefresh ? '✓' : '○'}
+                </span>
+                <span style={{ fontSize: 13 }}>Add to scheduled refresh</span>
+              </div>
+
+              {[plexConfigured, jellyfinConfigured, navidromeConfigured, slskdConfigured].filter(Boolean).length >= 1 && (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
+                  {[
+                    { id: 'plex', label: 'Plex', show: plexConfigured },
+                    { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
+                    { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
                     { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
