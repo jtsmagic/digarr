@@ -32,7 +32,6 @@ export default function Settings() {
   const [slskdStatus, setSlskdStatus] = useState(null);
   const [slskdTesting, setSlskdTesting] = useState(false);
   const [spotifyDisconnecting, setSpotifyDisconnecting] = useState(false);
-  const [refreshablePlaylists, setRefreshablePlaylists] = useState([]);
   const [openSections, setOpenSections] = useState(() => new Set(['general']));
   // Seed from localStorage so the button shows the right state on first paint,
   // before the API call comes back — no flash when navigating back mid-refresh.
@@ -83,10 +82,6 @@ export default function Settings() {
       setError(`Spotify connection failed: ${spotifyErr}`);
       window.history.replaceState({}, '', window.location.pathname);
     }
-    axios.get('/api/playlists').then(r => {
-      const all = r.data.playlists || [];
-      setRefreshablePlaylists(all.filter(p => p.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs', 'spotify'].includes(p.source_type)));
-    }).catch(() => {});
     axios.get('/api/library/cache/status').then(r => {
       setCacheStatus(r.data);
       if (r.data.refresh_state === 'running') startCachePoller();
@@ -94,17 +89,6 @@ export default function Settings() {
     axios.get('/api/jellyfin/cache/status').then(r => setJellyfinCacheStatus(r.data)).catch(() => {});
     axios.get('/api/navidrome/cache/status').then(r => setNavidromeCacheStatus(r.data)).catch(() => {});
   }, []);
-
-  const toggleExcluded = (id) => {
-    setConfig(prev => {
-      const excluded = new Set(prev.refresh_excluded_playlist_ids || []);
-      if (excluded.has(id)) excluded.delete(id);
-      else excluded.add(id);
-      return { ...prev, refresh_excluded_playlist_ids: [...excluded] };
-    });
-    setSaved(false);
-    setDirty(true);
-  };
 
   const handleSetPassword = async () => {
     setPasswordError('');
@@ -1273,36 +1257,6 @@ export default function Settings() {
             );
           })()}
 
-          {refreshablePlaylists.length > 0 && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
-                <span className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Playlists</span>
-                <span className="text-muted" style={{ fontSize: 11 }}>
-                  <span style={{ color: 'var(--green)' }}>✓</span> will refresh &nbsp;·&nbsp; <span style={{ opacity: 0.5 }}>✓</span> skipped
-                </span>
-              </div>
-              <div style={{ display: 'grid', gap: '0.3rem' }}>
-                {refreshablePlaylists.map(pl => {
-                  const excluded = (config.refresh_excluded_playlist_ids || []).includes(pl.id);
-                  return (
-                    <div key={pl.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
-                      onClick={() => toggleExcluded(pl.id)}>
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        width: 18, height: 18, flexShrink: 0,
-                        fontSize: 13, lineHeight: 1, fontWeight: 700,
-                        color: excluded ? 'var(--text-muted)' : 'var(--green)',
-                        opacity: excluded ? 0.4 : 1,
-                      }}>✓</span>
-                      <span style={{ fontSize: 13, color: excluded ? 'var(--text-muted)' : 'var(--text)', textDecoration: excluded ? 'line-through' : 'none' }}>
-                        {pl.name}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </>}
       </div>
 

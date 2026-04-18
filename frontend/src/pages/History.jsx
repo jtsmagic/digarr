@@ -39,6 +39,7 @@ export default function History() {
   const [schedulerStatus, setSchedulerStatus] = useState(null);
   const [runningNow, setRunningNow] = useState(false);
   const [runSummary, setRunSummary] = useState(null);
+  const [excludedIds, setExcludedIds] = useState(new Set());
   const [blocklist, setBlocklist] = useState([]);
   const [newBlocklistEntry, setNewBlocklistEntry] = useState('');
   const [blocklistSaving, setBlocklistSaving] = useState(false);
@@ -76,6 +77,7 @@ export default function History() {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
       setGlobalMerge(r.data.refresh_merge_tracks || false);
+      setExcludedIds(new Set(r.data.refresh_excluded_playlist_ids || []));
       setLidarrConfigured(!!(r.data.lidarr_url && r.data.lidarr_api_key));
     }).catch(() => {});
     axios.get('/api/scheduler/status').then(r => setSchedulerStatus(r.data)).catch(() => {});
@@ -352,6 +354,15 @@ export default function History() {
     } else {
       setConfirmDelete(pl.id);
     }
+  };
+
+  const handleToggleExcluded = async (e, pl) => {
+    e.stopPropagation();
+    const next = new Set(excludedIds);
+    if (next.has(pl.id)) next.delete(pl.id);
+    else next.add(pl.id);
+    setExcludedIds(next);
+    axios.post('/api/config', { refresh_excluded_playlist_ids: [...next] }).catch(() => {});
   };
 
   const handleSetMergeTracks = async (e, pl, value) => {
@@ -1220,6 +1231,19 @@ export default function History() {
                               ))}
                             </div>
                           ))}
+                        </div>
+                      );
+                    })()}
+
+                    {canRefresh && (() => {
+                      const excluded = excludedIds.has(pl.id);
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
+                          onClick={e => handleToggleExcluded(e, pl)}>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: excluded ? 'var(--text-muted)' : 'var(--green)' }}>
+                            {excluded ? '○' : '✓'}
+                          </span>
+                          <span style={{ fontSize: 12 }}>Include in scheduled refresh</span>
                         </div>
                       );
                     })()}
