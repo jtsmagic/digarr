@@ -7,7 +7,7 @@ from typing import List
 
 DB_PATH = os.environ.get("DB_PATH", "/data/digarr.db")
 
-SCHEMA_VERSION = 3  # Bump this when adding new migrations below
+SCHEMA_VERSION = 4  # Bump this when adding new migrations below
 
 
 def _get_schema_version(c) -> int:
@@ -173,6 +173,12 @@ def init_db():
         ("navidrome_playlist_id", "TEXT"),
         ("navidrome_matched_count", "INTEGER"),
         ("navidrome_total_count", "INTEGER"),
+        ("deemix_queued_count", "INTEGER"),
+        ("deemix_total_count", "INTEGER"),
+        ("slskd_queued_count", "INTEGER"),
+        ("slskd_flagged_count", "INTEGER"),
+        ("slskd_total_count", "INTEGER"),
+        ("slskd_flagged_tracks", "TEXT"),
     ]:
         try:
             c.execute(f"ALTER TABLE playlists ADD COLUMN {col} {typedef}")
@@ -308,7 +314,9 @@ def get_playlists() -> list:
                         plex_unmatched_tracks, last_refreshed_at, plex_playlist_name,
                         lidarr_results, spotify_playlist_id, spotify_matched_count, spotify_total_count,
                         jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
-                        navidrome_playlist_id, navidrome_matched_count, navidrome_total_count
+                        navidrome_playlist_id, navidrome_matched_count, navidrome_total_count,
+                        deemix_queued_count, deemix_total_count,
+                        slskd_queued_count, slskd_flagged_count, slskd_total_count
                  FROM playlists ORDER BY created_at DESC""")
     rows = c.fetchall()
     conn.close()
@@ -821,6 +829,39 @@ def db_delete_import_jobs_for_playlist(playlist_id: int) -> None:
         placeholders = ",".join("?" * len(to_delete))
         conn.execute(f"DELETE FROM import_jobs WHERE id IN ({placeholders})", to_delete)
         conn.commit()
+    conn.close()
+
+
+def update_playlist_deemix_result(
+    playlist_id: int,
+    queued_count: int,
+    total_count: int,
+) -> None:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE playlists SET deemix_queued_count = ?, deemix_total_count = ? WHERE id = ?",
+        (queued_count, total_count, playlist_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_playlist_slskd_result(
+    playlist_id: int,
+    queued_count: int,
+    flagged_count: int,
+    total_count: int,
+    flagged_tracks: list,
+) -> None:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        """UPDATE playlists SET slskd_queued_count = ?, slskd_flagged_count = ?,
+           slskd_total_count = ?, slskd_flagged_tracks = ? WHERE id = ?""",
+        (queued_count, flagged_count, total_count, json.dumps(flagged_tracks), playlist_id),
+    )
+    conn.commit()
     conn.close()
 
 

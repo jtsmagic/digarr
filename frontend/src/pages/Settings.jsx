@@ -27,6 +27,10 @@ export default function Settings() {
   const [navidromeTesting, setNavidromeTesting] = useState(false);
   const [navidromeCacheStatus, setNavidromeCacheStatus] = useState(null);
   const navidromeCachePollerRef = useRef(null);
+  const [deemixStatus, setDeemixStatus] = useState(null);
+  const [deemixTesting, setDeemixTesting] = useState(false);
+  const [slskdStatus, setSlskdStatus] = useState(null);
+  const [slskdTesting, setSlskdTesting] = useState(false);
   const [spotifyDisconnecting, setSpotifyDisconnecting] = useState(false);
   const [refreshablePlaylists, setRefreshablePlaylists] = useState([]);
   const [openSections, setOpenSections] = useState(() => new Set(['general']));
@@ -290,6 +294,32 @@ export default function Settings() {
       startNavidromeCachePoller();
     } catch (e) {
       setError(e.response?.data?.detail || 'Failed to start Navidrome cache refresh.');
+    }
+  };
+
+  const handleTestDeemix = async () => {
+    setDeemixTesting(true);
+    setDeemixStatus(null);
+    try {
+      const res = await axios.get('/api/deemix/status');
+      setDeemixStatus(res.data);
+    } catch (e) {
+      setDeemixStatus({ error: e.response?.data?.detail || 'Connection failed.' });
+    } finally {
+      setDeemixTesting(false);
+    }
+  };
+
+  const handleTestSlskd = async () => {
+    setSlskdTesting(true);
+    setSlskdStatus(null);
+    try {
+      const res = await axios.get('/api/slskd/status');
+      setSlskdStatus(res.data);
+    } catch (e) {
+      setSlskdStatus({ error: e.response?.data?.detail || 'Connection failed.' });
+    } finally {
+      setSlskdTesting(false);
     }
   };
 
@@ -1042,6 +1072,78 @@ export default function Settings() {
               disabled={navidromeCacheStatus?.refresh_state === 'running'}>
               ⟳ Refresh Library Cache
             </button>
+          </div>
+        </>}
+      </div>
+
+      {/* Deemix */}
+      <div className="card">
+        <SectionTitle sectionKey="deemix">Deemix</SectionTitle>
+        {openSections.has('deemix') && <>
+          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
+            Connect a self-hosted <a href="https://deemix.app" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>Deemix</a> instance
+            to automatically queue playlist tracks to Deezer/downloads during import.
+          </p>
+          <div className="field">
+            <label>Deemix URL</label>
+            <input value={config.deemix_url || ''} onChange={e => handleChange('deemix_url', e.target.value)}
+              placeholder="http://192.168.1.x:6595" />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+            <button className="btn btn-ghost" onClick={handleTestDeemix} disabled={deemixTesting}>
+              {deemixTesting ? <><span className="spinner" /> Testing...</> : 'Test Connection'}
+            </button>
+            {deemixStatus && (() => {
+              if (!deemixStatus.configured) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter URL and save before testing.</span>;
+              if (deemixStatus.error) return <span style={{ fontSize: 12, color: 'var(--red)' }}>✗ {deemixStatus.error}</span>;
+              return <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Connected{deemixStatus.version ? ` — v${deemixStatus.version}` : ''}</span>;
+            })()}
+          </div>
+        </>}
+      </div>
+
+      {/* slskd / Soulseek */}
+      <div className="card">
+        <SectionTitle sectionKey="slskd">Soulseek (slskd)</SectionTitle>
+        {openSections.has('slskd') && <>
+          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
+            Connect a self-hosted <a href="https://github.com/slskd/slskd" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>slskd</a> instance
+            to automatically search and download tracks via the Soulseek P2P network. Candidates are scored against
+            MusicBrainz metadata; high-confidence matches are auto-queued and low-confidence tracks are flagged for
+            manual review in the History detail panel.
+          </p>
+          <div className="field">
+            <label>slskd URL</label>
+            <input value={config.slskd_url || ''} onChange={e => handleChange('slskd_url', e.target.value)}
+              placeholder="http://192.168.1.x:5030" />
+          </div>
+          <div className="field">
+            <label>slskd API Key</label>
+            <input type="password" value={config.slskd_api_key || ''} onChange={e => handleChange('slskd_api_key', e.target.value)}
+              placeholder="your slskd API key" />
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              Found in slskd → Settings → API Keys.
+            </p>
+          </div>
+          <div className="field">
+            <label>Confidence Threshold — {config.slskd_confidence_threshold ?? 85}%</label>
+            <input type="range" min={50} max={99} step={1}
+              value={config.slskd_confidence_threshold ?? 85}
+              onChange={e => handleChange('slskd_confidence_threshold', parseInt(e.target.value))}
+              style={{ width: '100%' }} />
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              Matches scoring at or above this threshold are auto-queued. Below-threshold tracks are flagged for review.
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+            <button className="btn btn-ghost" onClick={handleTestSlskd} disabled={slskdTesting}>
+              {slskdTesting ? <><span className="spinner" /> Testing...</> : 'Test Connection'}
+            </button>
+            {slskdStatus && (() => {
+              if (!slskdStatus.configured) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter URL and API key, then save before testing.</span>;
+              if (slskdStatus.error) return <span style={{ fontSize: 12, color: 'var(--red)' }}>✗ {slskdStatus.error}</span>;
+              return <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Connected{slskdStatus.version ? ` — v${slskdStatus.version}` : ''}</span>;
+            })()}
           </div>
         </>}
       </div>

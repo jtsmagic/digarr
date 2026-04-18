@@ -633,7 +633,7 @@ export default function History() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: isDone ? 'var(--green)' : isError ? 'var(--red)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {isDone
-                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · Plex: ${job.plex_result.matched}/${job.plex_result.total}` : ''}${job.jellyfin_result ? ` · Jellyfin: ${job.jellyfin_result.matched}/${job.jellyfin_result.total}` : ''}${job.navidrome_result ? ` · Navidrome: ${job.navidrome_result.matched}/${job.navidrome_result.total}` : ''}`
+                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · Plex: ${job.plex_result.matched}/${job.plex_result.total}` : ''}${job.jellyfin_result ? ` · Jellyfin: ${job.jellyfin_result.matched}/${job.jellyfin_result.total}` : ''}${job.navidrome_result ? ` · Navidrome: ${job.navidrome_result.matched}/${job.navidrome_result.total}` : ''}${job.deemix_result ? ` · Deemix: ${job.deemix_result.queued}/${job.deemix_result.total}` : ''}${job.slskd_result ? ` · Soulseek: ${job.slskd_result.queued} queued${job.slskd_result.flagged > 0 ? ` · ${job.slskd_result.flagged} flagged` : ''}` : ''}`
                         : isError ? `Error: ${job.error}`
                         : job.status === 'queued' ? 'Queued…'
                         : `${job.current}/${job.total}${job.current_artist ? `: ${job.current_artist}` : ''}`}
@@ -1159,6 +1159,67 @@ export default function History() {
                         </div>
                       );
                     })()}
+                    {/* Soulseek flagged tracks — manual review */}
+                    {pl.slskd_flagged_count > 0 && (() => {
+                      const flaggedKey = `slskd_${pl.id}`;
+                      const flagged = window._slskdFlaggedCache?.[pl.id];
+                      if (!flagged) {
+                        axios.get(`/api/playlists/${pl.id}/slskd-flagged`).then(r => {
+                          if (!window._slskdFlaggedCache) window._slskdFlaggedCache = {};
+                          window._slskdFlaggedCache[pl.id] = r.data.flagged;
+                          // Force re-render
+                          setPlaylists(prev => [...prev]);
+                        }).catch(() => {});
+                        return null;
+                      }
+                      if (!flagged.length) return null;
+                      return (
+                        <div>
+                          <div className="card-title" style={{ marginBottom: '0.5rem' }}>
+                            Soulseek — Flagged Tracks
+                            <span className="text-muted" style={{ fontWeight: 400, marginLeft: 8 }}>
+                              {pl.slskd_queued_count} queued · {pl.slskd_flagged_count} need review
+                            </span>
+                          </div>
+                          <p className="text-muted" style={{ fontSize: 11, marginBottom: '0.5rem' }}>
+                            These tracks scored below your confidence threshold. Pick the best match to queue, or skip.
+                          </p>
+                          {flagged.map((track, ti) => (
+                            <div key={ti} style={{ marginBottom: '0.75rem', padding: '0.5rem', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: '0.35rem' }}>
+                                {track.artist} — {track.title}
+                                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
+                                  best score: {track.score?.toFixed(0)}%
+                                </span>
+                              </div>
+                              {(track.candidates || []).slice(0, 3).map((c, ci) => (
+                                <div key={ci} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 11, marginBottom: '0.2rem' }}>
+                                  <span style={{ color: 'var(--text-muted)', minWidth: 36 }}>{c.score?.toFixed(0)}%</span>
+                                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                                    {c.filename?.split(/[\\/]/).pop()}
+                                  </span>
+                                  <span className="text-muted" style={{ fontSize: 10 }}>{c.username}</span>
+                                  <button className="btn btn-ghost" style={{ fontSize: 9, padding: '2px 6px', flexShrink: 0 }}
+                                    onClick={() => {
+                                      axios.post('/api/slskd/queue', {
+                                        artist: track.artist, title: track.title,
+                                        username: c.username, filename: c.filename, size: c.size || 0,
+                                      }).then(() => {
+                                        if (!window._slskdFlaggedCache) window._slskdFlaggedCache = {};
+                                        window._slskdFlaggedCache[pl.id] = (window._slskdFlaggedCache[pl.id] || []).filter((_, i) => i !== ti);
+                                        setPlaylists(prev => [...prev]);
+                                      }).catch(e => alert(e.response?.data?.detail || 'Queue failed'));
+                                    }}>
+                                    Queue
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+
                     {pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'discogs'].includes(pl.source_type) && (() => {
                       const effective = pl.merge_tracks !== null && pl.merge_tracks !== undefined ? !!pl.merge_tracks : globalMerge;
                       return (

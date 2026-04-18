@@ -29,6 +29,8 @@ export default function Import() {
   const [spotifyConfigured, setSpotifyConfigured] = useState(false);
   const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
   const [navidromeConfigured, setNavidromeConfigured] = useState(false);
+  const [deemixConfigured, setDeemixConfigured] = useState(false);
+  const [slskdConfigured, setSlskdConfigured] = useState(false);
   const [syncTargets, setSyncTargets] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('syncTargets')) || ['plex', 'spotify']); }
     catch { return new Set(['plex', 'spotify']); }
@@ -43,6 +45,8 @@ export default function Import() {
     }).catch(() => {});
     axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
+    axios.get('/api/deemix/status').then(r => setDeemixConfigured(r.data.configured)).catch(() => {});
+    axios.get('/api/slskd/status').then(r => setSlskdConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       const d = r.data;
       setPlexConfigured(!!(d.plex_url && d.plex_token));
@@ -50,7 +54,7 @@ export default function Import() {
       const provider = d.active_ai_provider || 'claude';
       const hasAI = provider === 'openai' ? !!d.openai_api_key : !!d.anthropic_api_key;
       if (!hasAI) missing.push({ key: 'ai', label: 'AI provider', desc: 'Required for parsing URLs and text' });
-      if (!d.lidarr_url || !d.lidarr_api_key) missing.push({ key: 'lidarr', label: 'Lidarr', desc: 'Required to add artists to your library' });
+      if (!d.lidarr_url || !d.lidarr_api_key) missing.push({ key: 'lidarr', label: 'Lidarr', desc: 'Optional — artists won\'t be added to Lidarr without it', warning: true });
       setSetupItems(missing);
     }).catch(() => {});
   }, []);
@@ -268,11 +272,11 @@ export default function Import() {
       <h1 className="page-title">Import</h1>
       <p className="page-subtitle">Drop a URL, paste a list, or upload a file — Claude does the rest</p>
 
-      {setupItems.length > 0 && (
+      {setupItems.filter(i => !i.warning).length > 0 && (
         <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '3px solid var(--accent)' }}>
           <div className="card-title" style={{ marginBottom: '0.5rem' }}>Finish setting up Digarr</div>
           <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '0.75rem' }}>
-            {setupItems.map(item => (
+            {setupItems.filter(i => !i.warning).map(item => (
               <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 13 }}>
                 <span style={{ color: 'var(--red)', fontSize: 10 }}>●</span>
                 <strong>{item.label}</strong>
@@ -285,6 +289,12 @@ export default function Import() {
           </Link>
         </div>
       )}
+      {setupItems.filter(i => i.warning).map(item => (
+        <div key={item.key} className="alert" style={{ marginBottom: '1rem', fontSize: 12, borderLeft: '3px solid var(--yellow, #f5c518)', padding: '0.5rem 0.75rem' }}>
+          <strong>{item.label} not configured</strong> — {item.desc}.{' '}
+          <Link to="/settings" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Configure in Settings →</Link>
+        </div>
+      ))}
 
       {inputType !== 'spotify' && (
         <div className="field">
@@ -325,6 +335,8 @@ export default function Import() {
           plexConfigured={plexConfigured}
           jellyfinConfigured={jellyfinConfigured}
           navidromeConfigured={navidromeConfigured}
+          deemixConfigured={deemixConfigured}
+          slskdConfigured={slskdConfigured}
           onQueued={setQueuedJob}
         />
       ) : (
@@ -356,7 +368,7 @@ export default function Import() {
       )}
 
       {/* Sync targets — only shown when 2+ are configured, not needed for Spotify tab (handled internally) */}
-      {inputType !== 'spotify' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 2 && (
+      {inputType !== 'spotify' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 2 && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
           {[
@@ -364,6 +376,8 @@ export default function Import() {
             { id: 'spotify', label: 'Spotify', show: spotifyConfigured },
             { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
             { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+            { id: 'deemix', label: 'Deemix', show: deemixConfigured },
+            { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
           ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={syncTargets.has(id)}
@@ -566,7 +580,7 @@ export default function Import() {
 // Spotify import tab
 // ---------------------------------------------------------------------------
 
-function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigured, navidromeConfigured, onQueued }) {
+function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured, onQueued }) {
   const [playlists, setPlaylists]         = useState(null);
   const [listsLoading, setListsLoading]   = useState(false);
   const [selectedPlaylist, setSelectedPlaylist] = useState('');
@@ -776,13 +790,15 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
                 <span style={{ fontSize: 13 }}>Add to scheduled refresh</span>
               </div>
 
-              {[plexConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 1 && (
+              {[plexConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 1 && (
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
                   {[
                     { id: 'plex', label: 'Plex', show: plexConfigured },
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+                    { id: 'deemix', label: 'Deemix', show: deemixConfigured },
+                    { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}

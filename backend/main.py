@@ -66,6 +66,8 @@ from jellyfin import JellyfinClient
 from navidrome import NavidromeClient
 from media_client import PlexMediaClient, JellyfinMediaClient, NavidromeMediaClient
 from download_client import LidarrDownloadClient
+from deemix import DeemixClient
+from slskd import SlskdClient
 from ai.claude import ClaudeProvider
 from ai.openai import OpenAIProvider
 
@@ -101,6 +103,7 @@ from config import load_config, save_config
 from database import (
     db_prune_expired_sessions, save_oauth_state, consume_oauth_state,
     db_save_import_job, db_load_recent_import_jobs, db_prune_import_jobs,
+    update_playlist_deemix_result, update_playlist_slskd_result,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -723,6 +726,8 @@ def _new_job(playlist_name: str, total: int) -> dict:
         "plex_result": None,
         "jellyfin_result": None,
         "navidrome_result": None,
+        "deemix_result": None,
+        "slskd_result": None,
         "created_at": datetime.utcnow().isoformat(),
         "completed_at": None,
         "error": None,
@@ -746,7 +751,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     config = load_config()
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
 
-    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome"}
+    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome", "deemix", "slskd"}
 
     # Plex push first — it only needs the track list, not Lidarr results,
     # so the playlist appears in Plex immediately while artists are being added.
@@ -817,6 +822,18 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
             except Exception as exc:
                 logger.error("Spotify push failed for job %s: %s", job_id, exc)
 
+    # Deemix push — inline with import, async queue to Deezer via Deemix
+    if "deemix" in targets and config.get("deemix_url") and req.tracks:
+        try:
+            dx = DeemixClient(config["deemix_url"])
+            dx_result = await dx.queue_tracks(req.tracks)
+            update_playlist_deemix_result(
+                playlist_id, dx_result["queued"], len(req.tracks)
+            )
+            job["deemix_result"] = {"queued": dx_result["queued"], "total": len(req.tracks)}
+        except Exception as exc:
+            logger.error("Deemix push failed for job %s: %s", job_id, exc)
+
     # Build album hint and first-track maps from track list
     album_hint_map: dict = {}
     first_track_map: dict = {}
@@ -881,6 +898,32 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     except Exception as exc:
         job["error"] = f"Failed to update playlist: {exc}"
         logger.error("Import job %s update error", job_id, exc_info=True)
+
+    # Soulseek background phase — runs after Lidarr so we have artist info
+    if "slskd" in targets and config.get("slskd_url") and config.get("slskd_api_key") and req.tracks:
+        try:
+            slskd = SlskdClient(
+                config["slskd_url"],
+                config["slskd_api_key"],
+                confidence_threshold=int(config.get("slskd_confidence_threshold") or 85),
+            )
+            job["status"] = "running_slskd"
+            sl_result = await slskd.queue_tracks(req.tracks)
+            flagged = [r for r in sl_result["results"] if r["status"] == "flagged"]
+            update_playlist_slskd_result(
+                playlist_id,
+                sl_result["queued"],
+                sl_result["flagged"],
+                len(req.tracks),
+                flagged,
+            )
+            job["slskd_result"] = {
+                "queued": sl_result["queued"],
+                "flagged": sl_result["flagged"],
+                "total": len(req.tracks),
+            }
+        except Exception as exc:
+            logger.error("Soulseek phase failed for job %s: %s", job_id, exc)
 
     job["status"] = "done"
     job["completed_at"] = datetime.utcnow().isoformat()
@@ -2261,6 +2304,85 @@ async def refresh_navidrome_cache():
 async def navidrome_cache_status():
     stats = db_get_cache_stats("navidrome")
     return {**stats, "refresh_state": _navidrome_cache_refresh_state["state"], "refresh_error": _navidrome_cache_refresh_state.get("error")}
+
+
+# ---------------------------------------------------------------------------
+# Deemix endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/deemix/status")
+async def deemix_status():
+    config = load_config()
+    if not config.get("deemix_url"):
+        return {"configured": False}
+    try:
+        dx = DeemixClient(config["deemix_url"])
+        info = await dx.test_connection()
+        return {"configured": True, **info}
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# slskd endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/slskd/status")
+async def slskd_status():
+    config = load_config()
+    if not config.get("slskd_url") or not config.get("slskd_api_key"):
+        return {"configured": False}
+    try:
+        sl = SlskdClient(config["slskd_url"], config["slskd_api_key"])
+        info = await sl.test_connection()
+        return {"configured": True, **info}
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+@app.get("/api/playlists/{playlist_id}/slskd-flagged")
+def get_slskd_flagged(playlist_id: int):
+    """Return the list of flagged Soulseek tracks for manual review."""
+    import json as _json
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    raw = pl.get("slskd_flagged_tracks") or "[]"
+    if isinstance(raw, str):
+        try:
+            flagged = _json.loads(raw)
+        except Exception:
+            flagged = []
+    else:
+        flagged = raw
+    return {
+        "flagged": flagged,
+        "queued": pl.get("slskd_queued_count") or 0,
+        "flagged_count": pl.get("slskd_flagged_count") or 0,
+        "total": pl.get("slskd_total_count") or 0,
+    }
+
+
+class SlskdManualQueueRequest(BaseModel):
+    artist: str
+    title: str
+    username: str
+    filename: str
+    size: int = 0
+
+
+@app.post("/api/slskd/queue")
+async def slskd_manual_queue(req: SlskdManualQueueRequest):
+    """Manually queue a specific Soulseek file that was flagged for review."""
+    config = load_config()
+    if not config.get("slskd_url") or not config.get("slskd_api_key"):
+        raise HTTPException(status_code=400, detail="slskd not configured.")
+    sl = SlskdClient(config["slskd_url"], config["slskd_api_key"])
+    try:
+        await sl._queue_download(req.username, {"filename": req.filename, "size": req.size})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"slskd download failed: {exc}")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

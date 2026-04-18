@@ -106,6 +106,11 @@ async def lookup_track(artist: str, title: str) -> dict:
         if canonical:
             result["canonical_artist"] = canonical
 
+    # --- duration (ms) ---
+    duration_ms = rec.get("length")  # MusicBrainz returns duration in ms
+    if duration_ms:
+        result["duration_ms"] = duration_ms
+
     # --- best album ---
     # Prefer studio/EP releases; skip compilations and live albums.
     # release-group.primary-type may or may not be present in search results —
