@@ -223,13 +223,12 @@ async def auth_middleware(request: Request, call_next):
 async def startup():
     init_db()
     db_prune_expired_sessions()
-    # Recover persisted jobs; any that were mid-flight when the container stopped get marked error
+    # Recover persisted jobs; drop any that were mid-flight (unrecoverable)
     for job in db_load_recent_import_jobs():
         if job["status"] in ("running", "queued"):
-            job["status"] = "error"
-            job["error"] = "Interrupted by restart"
-            db_save_import_job(job)
-        _jobs[job["id"]] = job
+            db_delete_import_job(job["id"])
+        else:
+            _jobs[job["id"]] = job
     config = load_config()
     _reschedule(int(config.get("refresh_interval_hours") or 0))
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
