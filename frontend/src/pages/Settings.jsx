@@ -1095,6 +1095,14 @@ export default function Settings() {
             <input value={config.deemix_url || ''} onChange={e => handleChange('deemix_url', e.target.value)}
               placeholder="http://192.168.1.x:6595" />
           </div>
+          <div className="field" style={{ marginTop: '0.75rem' }}>
+            <label>Deezer ARL <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 11 }}>— required to browse playlists</span></label>
+            <input type="password" value={config.deemix_arl || ''} onChange={e => handleChange('deemix_arl', e.target.value)}
+              placeholder="Paste your Deezer ARL token" />
+            <p className="text-muted" style={{ fontSize: 11, marginTop: '0.3rem' }}>
+              To get your ARL: log into <strong>deezer.com</strong> in your browser → open DevTools (F12) → Application → Cookies → find <span className="text-mono">arl</span>.
+            </p>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
             <button className="btn btn-ghost" onClick={handleTestDeemix} disabled={deemixTesting}>
               {deemixTesting ? <><span className="spinner" /> Testing...</> : 'Test Connection'}
@@ -1102,7 +1110,9 @@ export default function Settings() {
             {deemixStatus && (() => {
               if (!deemixStatus.configured) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter URL and save before testing.</span>;
               if (deemixStatus.error) return <span style={{ fontSize: 12, color: 'var(--red)' }}>✗ {deemixStatus.error}</span>;
-              return <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Connected{deemixStatus.version ? ` — v${deemixStatus.version}` : ''}</span>;
+              if (deemixStatus.arl_error) return <span style={{ fontSize: 12, color: '#ffb300' }}>✓ Connected — ⚠ ARL error: {deemixStatus.arl_error}</span>;
+              if (deemixStatus.logged_in === false) return <span style={{ fontSize: 12, color: '#ffb300' }}>✓ Connected — ⚠ Not logged in (add ARL above)</span>;
+              return <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Connected{deemixStatus.logged_in ? ' · logged in' : ''}{deemixStatus.version ? ` — v${deemixStatus.version}` : ''}</span>;
             })()}
           </div>
         </>}
