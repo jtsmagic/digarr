@@ -322,6 +322,7 @@ def get_playlists() -> list:
                         plex_playlist_id, plex_matched_count, plex_total_count,
                         plex_unmatched_tracks, last_refreshed_at, plex_playlist_name,
                         lidarr_results, spotify_playlist_id, spotify_matched_count, spotify_total_count,
+                        merge_tracks,
                         jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
                         navidrome_playlist_id, navidrome_matched_count, navidrome_total_count,
                         deemix_queued_count, deemix_total_count,

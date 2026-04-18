@@ -255,9 +255,13 @@ export default function History() {
     try {
       const res = await axios.post(`/api/plex/playlist/${pl.id}/sync`);
       setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
-      // Update the plex_playlist_id in local state
       setPlaylists(prev => prev.map(p =>
-        p.id === pl.id ? { ...p, plex_playlist_id: res.data.plex_playlist_id } : p
+        p.id === pl.id ? {
+          ...p,
+          plex_playlist_id: res.data.plex_playlist_id,
+          plex_matched_count: res.data.matched,
+          plex_total_count: res.data.total,
+        } : p
       ));
     } catch (err) {
       const msg = err.response?.data?.detail || 'Plex sync failed.';
