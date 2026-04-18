@@ -62,6 +62,10 @@ DEFAULTS = {
     "oidc_client_id": "",
     "oidc_client_secret": "",
     "oidc_redirect_uri": "",
+    "deemix_url": "",
+    "slskd_url": "",
+    "slskd_api_key": "",
+    "slskd_confidence_threshold": 85,
 }
 
 # Environment variable overrides for sensitive keys.
