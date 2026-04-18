@@ -24,6 +24,10 @@ export default function History() {
   const [refreshStates, setRefreshStates] = useState({});  // { [id]: { loading, result, error } }
   const [syncAllLoading, setSyncAllLoading] = useState(false);
   const [syncAllResult, setSyncAllResult] = useState(null);
+  const [jellyfinSyncAllLoading, setJellyfinSyncAllLoading] = useState(false);
+  const [jellyfinSyncAllResult, setJellyfinSyncAllResult] = useState(null);
+  const [navidromeSyncAllLoading, setNavidromeSyncAllLoading] = useState(false);
+  const [navidromeSyncAllResult, setNavidromeSyncAllResult] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); // playlist id pending delete
   const [confirmRefresh, setConfirmRefresh] = useState(null); // playlist id pending refresh
   const [renamingId, setRenamingId] = useState(null); // playlist id being renamed
@@ -377,6 +381,40 @@ export default function History() {
     setSyncAllLoading(false);
   };
 
+  const handleSyncAllJellyfin = async () => {
+    setJellyfinSyncAllLoading(true);
+    setJellyfinSyncAllResult(null);
+    try {
+      const res = await axios.post('/api/jellyfin/sync-all');
+      setJellyfinSyncAllResult(res.data);
+      setPlaylists(prev => prev.map(p => {
+        const r = res.data.results?.find(r => r.id === p.id);
+        if (!r || r.status !== 'ok') return p;
+        return { ...p, jellyfin_playlist_id: r.jellyfin_playlist_id ?? p.jellyfin_playlist_id, jellyfin_matched_count: r.matched, jellyfin_total_count: r.total };
+      }));
+    } catch (err) {
+      setJellyfinSyncAllResult({ error: err.response?.data?.detail || 'Jellyfin sync all failed.' });
+    }
+    setJellyfinSyncAllLoading(false);
+  };
+
+  const handleSyncAllNavidrome = async () => {
+    setNavidromeSyncAllLoading(true);
+    setNavidromeSyncAllResult(null);
+    try {
+      const res = await axios.post('/api/navidrome/sync-all');
+      setNavidromeSyncAllResult(res.data);
+      setPlaylists(prev => prev.map(p => {
+        const r = res.data.results?.find(r => r.id === p.id);
+        if (!r || r.status !== 'ok') return p;
+        return { ...p, navidrome_playlist_id: r.navidrome_playlist_id ?? p.navidrome_playlist_id, navidrome_matched_count: r.matched, navidrome_total_count: r.total };
+      }));
+    } catch (err) {
+      setNavidromeSyncAllResult({ error: err.response?.data?.detail || 'Navidrome sync all failed.' });
+    }
+    setNavidromeSyncAllLoading(false);
+  };
+
   const startRename = (e, pl) => {
     e.stopPropagation();
     setRenamingId(pl.id);
@@ -456,9 +494,19 @@ export default function History() {
         {playlists.some(p => p.plex_playlist_id) && (
           <button className="btn btn-ghost" style={{ fontSize: 11, color: 'var(--accent)', borderColor: 'var(--accent)' }}
             disabled={syncAllLoading} onClick={handleSyncAll}>
-            {syncAllLoading
-              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing all…</>
-              : '⟳ Sync All to Plex'}
+            {syncAllLoading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</> : '⟳ Sync All to Plex'}
+          </button>
+        )}
+        {jellyfinConfigured && playlists.some(p => p.jellyfin_playlist_id) && (
+          <button className="btn btn-ghost" style={{ fontSize: 11, color: '#00a4dc', borderColor: '#00a4dc' }}
+            disabled={jellyfinSyncAllLoading} onClick={handleSyncAllJellyfin}>
+            {jellyfinSyncAllLoading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</> : '⟳ Sync All to Jellyfin'}
+          </button>
+        )}
+        {navidromeConfigured && playlists.some(p => p.navidrome_playlist_id) && (
+          <button className="btn btn-ghost" style={{ fontSize: 11, color: '#fc6e51', borderColor: '#fc6e51' }}
+            disabled={navidromeSyncAllLoading} onClick={handleSyncAllNavidrome}>
+            {navidromeSyncAllLoading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</> : '⟳ Sync All to Navidrome'}
           </button>
         )}
       </div>
@@ -483,6 +531,32 @@ export default function History() {
       {syncAllResult?.error && (
         <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{syncAllResult.error}</div>
       )}
+      {jellyfinSyncAllResult && !jellyfinSyncAllResult.error && (
+        <div style={{ marginBottom: '1rem', fontSize: 12, display: 'grid', gap: '0.2rem' }}>
+          {jellyfinSyncAllResult.results?.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <span style={{ color: r.status === 'error' ? 'var(--red)' : 'var(--text-muted)' }}>{r.status === 'error' ? '✕' : '✓'}</span>
+              <span>{r.name}</span>
+              {r.status === 'ok' && <span className="text-muted">{r.matched}/{r.total} matched</span>}
+              {r.status === 'error' && <span style={{ color: 'var(--red)', fontSize: 11 }}>{r.error}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {jellyfinSyncAllResult?.error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{jellyfinSyncAllResult.error}</div>}
+      {navidromeSyncAllResult && !navidromeSyncAllResult.error && (
+        <div style={{ marginBottom: '1rem', fontSize: 12, display: 'grid', gap: '0.2rem' }}>
+          {navidromeSyncAllResult.results?.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <span style={{ color: r.status === 'error' ? 'var(--red)' : 'var(--text-muted)' }}>{r.status === 'error' ? '✕' : '✓'}</span>
+              <span>{r.name}</span>
+              {r.status === 'ok' && <span className="text-muted">{r.matched}/{r.total} matched</span>}
+              {r.status === 'error' && <span style={{ color: 'var(--red)', fontSize: 11 }}>{r.error}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {navidromeSyncAllResult?.error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{navidromeSyncAllResult.error}</div>}
 
       {/* Scheduled Refresh panel */}
       {schedulerStatus && (
@@ -775,22 +849,28 @@ export default function History() {
                         )}
                         {spotifyPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{spotifyPush.error}</span>}
 
-                        {/* Jellyfin inline feedback */}
-                        {jellyfinSync.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Syncing Jellyfin…</span>}
-                        {jellyfinSync.result && (
-                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
-                            Jellyfin: {jellyfinSync.result.matched}/{jellyfinSync.result.total} matched
-                          </span>
+                        {/* Jellyfin — primary button only when already synced */}
+                        {jellyfinConfigured && pl.jellyfin_playlist_id && (
+                          <button className="btn btn-ghost" style={{ fontSize: 10, color: '#00a4dc', borderColor: '#00a4dc' }}
+                            disabled={jellyfinSync.loading} onClick={e => handleSyncJellyfin(e, pl)}>
+                            {jellyfinSync.loading
+                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
+                              : '⟳ Sync Jellyfin'}
+                          </button>
                         )}
+                        {jellyfinSync.result && <span style={{ fontSize: 11, color: 'var(--green)' }}>Jellyfin: {jellyfinSync.result.matched}/{jellyfinSync.result.total}</span>}
                         {jellyfinSync.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{jellyfinSync.error}</span>}
 
-                        {/* Navidrome inline feedback */}
-                        {navidromeSync.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Syncing Navidrome…</span>}
-                        {navidromeSync.result && (
-                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
-                            Navidrome: {navidromeSync.result.matched}/{navidromeSync.result.total} matched
-                          </span>
+                        {/* Navidrome — primary button only when already synced */}
+                        {navidromeConfigured && pl.navidrome_playlist_id && (
+                          <button className="btn btn-ghost" style={{ fontSize: 10, color: '#fc6e51', borderColor: '#fc6e51' }}
+                            disabled={navidromeSync.loading} onClick={e => handleSyncNavidrome(e, pl)}>
+                            {navidromeSync.loading
+                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
+                              : '⟳ Sync Navidrome'}
+                          </button>
                         )}
+                        {navidromeSync.result && <span style={{ fontSize: 11, color: 'var(--green)' }}>Navidrome: {navidromeSync.result.matched}/{navidromeSync.result.total}</span>}
                         {navidromeSync.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{navidromeSync.error}</span>}
 
                         {/* Overflow menu — M3U download + Delete */}
