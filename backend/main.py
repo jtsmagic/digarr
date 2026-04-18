@@ -840,7 +840,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     # Deemix push — inline with import, async queue to Deezer via Deemix
     if "deemix" in targets and config.get("deemix_url") and req.tracks:
         try:
-            dx = DeemixClient(config["deemix_url"])
+            dx = DeemixClient(config["deemix_url"], config.get("deemix_arl", ""))
             dx_result = await dx.queue_tracks(req.tracks)
             update_playlist_deemix_result(
                 playlist_id, dx_result["queued"], len(req.tracks)
@@ -2411,7 +2411,7 @@ async def deemix_status():
     if not config.get("deemix_url"):
         return {"configured": False}
     try:
-        dx = DeemixClient(config["deemix_url"])
+        dx = DeemixClient(config["deemix_url"], config.get("deemix_arl", ""))
         info = await dx.test_connection()
         return {"configured": True, **info}
     except Exception as e:
@@ -2424,7 +2424,7 @@ async def deemix_playlists():
     if not config.get("deemix_url"):
         raise HTTPException(status_code=400, detail="Deemix not configured.")
     try:
-        dx = DeemixClient(config["deemix_url"])
+        dx = DeemixClient(config["deemix_url"], config.get("deemix_arl", ""))
         playlists = await dx.get_user_playlists()
         return {"playlists": playlists}
     except ValueError as e:
@@ -2439,7 +2439,7 @@ async def deemix_playlist_tracks(playlist_id: str):
     if not config.get("deemix_url"):
         raise HTTPException(status_code=400, detail="Deemix not configured.")
     try:
-        dx = DeemixClient(config["deemix_url"])
+        dx = DeemixClient(config["deemix_url"], config.get("deemix_arl", ""))
         data = await dx.get_playlist_tracks(playlist_id)
         return data
     except ValueError as e:

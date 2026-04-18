@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 _SEMAPHORE_LIMIT = 3
 _semaphore: asyncio.Semaphore | None = None
 
+# Module-level session cookie cache keyed by base_url
+_session_cache: dict[str, dict] = {}
+
 
 def _get_semaphore() -> asyncio.Semaphore:
     global _semaphore
@@ -25,31 +28,77 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 class DeemixClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, arl: str = ""):
         self.base_url = base_url.rstrip("/")
+        self.arl = arl.strip()
+
+    async def _login(self) -> dict:
+        """POST /api/loginArl and cache the session cookies. Returns cookie dict."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{self.base_url}/api/loginArl",
+                json={"arl": self.arl},
+            )
+            r.raise_for_status()
+            data = r.json()
+            status = data.get("status", 0)
+            # 1=success, 2=already_logged, 3=forced_success
+            if status not in (1, 2, 3):
+                raise ValueError(f"Deemix ARL login failed (status {status}). Check your ARL.")
+            cookies = dict(r.cookies)
+            _session_cache[self.base_url] = cookies
+            return cookies
+
+    async def _cookies(self, force_refresh: bool = False) -> dict:
+        """Return cached session cookies, logging in if needed."""
+        if not self.arl:
+            return {}
+        if not force_refresh and self.base_url in _session_cache:
+            return _session_cache[self.base_url]
+        return await self._login()
+
+    async def _get(self, path: str, **kwargs) -> httpx.Response:
+        cookies = await self._cookies()
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{self.base_url}{path}", cookies=cookies, **kwargs)
+            return r
+
+    async def _post_json(self, path: str, payload: dict, **kwargs) -> httpx.Response:
+        cookies = await self._cookies()
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{self.base_url}{path}", json=payload, cookies=cookies, **kwargs
+            )
+            return r
 
     async def test_connection(self) -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Try /api/settings first; fall back to root — different Deemix builds
-            # return different things (some return empty bodies, some return HTML).
-            for path in ("/api/settings", "/api/ping", "/"):
+        # Try /api/settings first; fall back to root — different Deemix builds
+        # return different things (some return empty bodies, some return HTML).
+        for path in ("/api/settings", "/api/ping", "/"):
+            try:
+                r = await self._get(path)
+                r.raise_for_status()
                 try:
-                    r = await client.get(f"{self.base_url}{path}")
-                    r.raise_for_status()
-                    try:
-                        data = r.json()
-                        version = (
-                            data.get("version")
-                            or data.get("settings", {}).get("version", "")
-                        )
-                    except Exception:
-                        data = {}
-                        version = ""
-                    return {"connected": True, "version": version}
-                except httpx.HTTPStatusError:
-                    raise
+                    data = r.json()
+                    version = (
+                        data.get("version")
+                        or data.get("settings", {}).get("version", "")
+                    )
                 except Exception:
-                    continue
+                    data = {}
+                    version = ""
+                # If ARL provided, try to login and confirm
+                if self.arl:
+                    try:
+                        await self._login()
+                        return {"connected": True, "version": version, "logged_in": True}
+                    except Exception as e:
+                        return {"connected": True, "version": version, "logged_in": False, "arl_error": str(e)}
+                return {"connected": True, "version": version}
+            except httpx.HTTPStatusError:
+                raise
+            except Exception:
+                continue
         raise ConnectionError("Deemix did not respond on any known endpoint")
 
     async def search_track(self, artist: str, title: str) -> list[dict]:
@@ -79,25 +128,32 @@ class DeemixClient:
 
     async def get_user_playlists(self) -> list[dict]:
         """Return the logged-in Deezer user's playlists via deemix."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(f"{self.base_url}/api/getUserPlaylists")
+        for attempt in range(2):
+            r = await self._get("/api/getUserPlaylists")
             r.raise_for_status()
             data = r.json()
-            if "error" in data:
-                raise ValueError(data["error"])
-            playlists = data.get("playlists", data) if isinstance(data, dict) else data
-            if isinstance(playlists, dict):
-                playlists = playlists.get("data", list(playlists.values()))
-            return [
-                {
-                    "id": str(p.get("id", "")),
-                    "name": p.get("title") or p.get("name") or "Untitled",
-                    "nb_tracks": p.get("nb_tracks") or p.get("track_count") or 0,
-                    "picture": p.get("picture_medium") or p.get("picture") or "",
-                }
-                for p in (playlists or [])
-                if p.get("id")
-            ]
+            if isinstance(data, dict) and data.get("error") == "notLoggedIn":
+                if attempt == 0 and self.arl:
+                    # Session expired — force re-login and retry
+                    await self._cookies(force_refresh=True)
+                    continue
+                raise ValueError(
+                    "notLoggedIn — provide your Deezer ARL in Settings → Deemix."
+                )
+            break
+        playlists = data.get("playlists", data) if isinstance(data, dict) else data
+        if isinstance(playlists, dict):
+            playlists = playlists.get("data", list(playlists.values()))
+        return [
+            {
+                "id": str(p.get("id", "")),
+                "name": p.get("title") or p.get("name") or "Untitled",
+                "nb_tracks": p.get("nb_tracks") or p.get("track_count") or 0,
+                "picture": p.get("picture_medium") or p.get("picture") or "",
+            }
+            for p in (playlists or [])
+            if p.get("id")
+        ]
 
     async def get_playlist_tracks(self, playlist_id: str) -> dict:
         """Fetch tracks for a Deezer playlist via the public Deezer API."""
@@ -124,13 +180,20 @@ class DeemixClient:
     async def queue_track(self, deezer_url: str, bitrate: str = "FLAC") -> dict:
         """Add a Deezer track URL to the Deemix download queue."""
         async with _get_semaphore():
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.post(
-                    f"{self.base_url}/api/addToQueue",
-                    json={"url": deezer_url, "bitrate": bitrate},
+            for attempt in range(2):
+                r = await self._post_json(
+                    "/api/addToQueue",
+                    {"url": deezer_url, "bitrate": bitrate},
                 )
                 r.raise_for_status()
-                return r.json()
+                data = r.json()
+                if isinstance(data, dict) and data.get("errid") == "NotLoggedIn":
+                    if attempt == 0 and self.arl:
+                        await self._cookies(force_refresh=True)
+                        continue
+                    raise ValueError("Deemix: not logged in — provide your ARL in Settings.")
+                return data
+        return {}
 
     async def queue_tracks(self, tracks: list[dict]) -> dict:
         """
