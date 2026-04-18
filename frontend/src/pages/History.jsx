@@ -47,6 +47,7 @@ export default function History() {
   const [lidarrConfigured, setLidarrConfigured] = useState(false);
   const [importJobs, setImportJobs] = useState([]);
   const completedJobIds = useRef(new Set());
+  const dismissedJobIds = useRef(new Set());
 
   // Manual track matching
   const [searchModal, setSearchModal] = useState(null); // { track, playlistId }
@@ -82,7 +83,7 @@ export default function History() {
       setPlaylists(r.data.playlists);
       setLoading(false);
     }).catch(() => setLoading(false));
-    axios.get('/api/import/jobs').then(r => setImportJobs(r.data.jobs || [])).catch(() => {});
+    axios.get('/api/import/jobs').then(r => setImportJobs((r.data.jobs || []).filter(j => !dismissedJobIds.current.has(j.id)))).catch(() => {});
     axios.get('/api/library/ignored-tracks').then(r => {
       const keys = new Set((r.data.ignored || []).map(t => `${t.artist.toLowerCase()}||${t.title.toLowerCase()}`));
       setIgnoredTracks(keys);
@@ -112,7 +113,7 @@ export default function History() {
           axios.get('/api/playlists').then(r => setPlaylists(r.data.playlists)).catch(() => {});
         }
 
-        setImportJobs(newJobs);
+        setImportJobs(newJobs.filter(j => !dismissedJobIds.current.has(j.id)));
       } catch {}
     }, 2000);
 
@@ -643,6 +644,7 @@ export default function History() {
                     {(isDone || isError) && (
                       <button className="btn btn-ghost" style={{ fontSize: 10, padding: '1px 6px' }}
                         onClick={() => {
+                          dismissedJobIds.current.add(job.id);
                           axios.delete(`/api/import/jobs/${job.id}`).catch(() => {});
                           setImportJobs(prev => prev.filter(j => j.id !== job.id));
                         }}>
