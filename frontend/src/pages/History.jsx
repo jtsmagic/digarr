@@ -50,6 +50,7 @@ export default function History() {
   // Manual track matching
   const [searchModal, setSearchModal] = useState(null); // { track, playlistId }
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchSource, setSearchSource] = useState('plex');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchSaved, setSearchSaved] = useState(null); // track key that was just saved
@@ -159,11 +160,11 @@ export default function History() {
     setSearchResults([]);
   };
 
-  const runLibrarySearch = async (q) => {
+  const runLibrarySearch = async (q, source) => {
     if (!q || q.trim().length < 2) { setSearchResults([]); return; }
     setSearchLoading(true);
     try {
-      const res = await axios.get('/api/library/search', { params: { q: q.trim(), limit: 20 } });
+      const res = await axios.get('/api/library/search', { params: { q: q.trim(), limit: 20, source: source || searchSource } });
       setSearchResults(res.data.results || []);
     } catch {
       setSearchResults([]);
@@ -461,12 +462,12 @@ export default function History() {
     }
   };
 
-  // Debounce search as the user types
+  // Debounce search as the user types or switches source
   useEffect(() => {
     if (!searchModal) return;
-    const timer = setTimeout(() => runLibrarySearch(searchQuery), 280);
+    const timer = setTimeout(() => runLibrarySearch(searchQuery, searchSource), 280);
     return () => clearTimeout(timer);
-  }, [searchQuery, searchModal]);
+  }, [searchQuery, searchSource, searchModal]);
 
   // Close search modal on Escape
   useEffect(() => {
@@ -565,7 +566,7 @@ export default function History() {
             <div>
               <div className="card-title" style={{ marginBottom: '0.2rem' }}>Scheduled Refresh</div>
               <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
-                Re-fetches each playlist from its source URL, adds new artists to Lidarr, and re-syncs Plex. Only applies to playlists with a source URL (not static imports).
+                Re-fetches each playlist from its source URL, adds new artists to Lidarr, and re-syncs connected media servers. Only applies to playlists with a source URL (not static imports).
               </p>
             </div>
           </div>
@@ -632,7 +633,7 @@ export default function History() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: isDone ? 'var(--green)' : isError ? 'var(--red)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {isDone
-                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · ${job.plex_result.matched}/${job.plex_result.total} tracks in Plex` : ''}`
+                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · Plex: ${job.plex_result.matched}/${job.plex_result.total}` : ''}${job.jellyfin_result ? ` · Jellyfin: ${job.jellyfin_result.matched}/${job.jellyfin_result.total}` : ''}${job.navidrome_result ? ` · Navidrome: ${job.navidrome_result.matched}/${job.navidrome_result.total}` : ''}`
                         : isError ? `Error: ${job.error}`
                         : job.status === 'queued' ? 'Queued…'
                         : `${job.current}/${job.total}${job.current_artist ? `: ${job.current_artist}` : ''}`}
@@ -1294,6 +1295,22 @@ export default function History() {
             </div>
 
             <div className="modal-body">
+              {/* Source tabs — shown when multiple libraries are configured */}
+              {(jellyfinConfigured || navidromeConfigured) && (
+                <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem' }}>
+                  {[
+                    { id: 'plex', label: 'Plex', show: true },
+                    { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
+                    { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+                  ].filter(t => t.show).map(({ id, label }) => (
+                    <button key={id} className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: '3px 10px', background: searchSource === id ? 'var(--accent)' : 'none', color: searchSource === id ? '#fff' : 'var(--text-muted)', borderColor: searchSource === id ? 'var(--accent)' : 'var(--border)' }}
+                      onClick={() => setSearchSource(id)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
                 <input
                   value={searchQuery}
@@ -1337,7 +1354,7 @@ export default function History() {
                 <div className="text-muted" style={{ textAlign: 'center', padding: '1.5rem 0' }}>
                   No tracks found. Try a different search.
                   <div style={{ marginTop: '0.5rem', fontSize: 11 }}>
-                    If your library cache is empty, refresh it in Settings → Plex.
+                    If your library cache is empty, refresh it in Settings → {searchSource === 'jellyfin' ? 'Jellyfin' : searchSource === 'navidrome' ? 'Navidrome' : 'Plex'}.
                   </div>
                 </div>
               ) : !searchLoading && (
