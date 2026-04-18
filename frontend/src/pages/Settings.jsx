@@ -672,10 +672,33 @@ export default function Settings() {
           </div>
           <div className="field" style={{ marginTop: '0.75rem' }}>
             <label>OAuth Redirect URI</label>
-            <input type="text" value={config.spotify_redirect_uri || ''}
-              onChange={e => handleChange('spotify_redirect_uri', e.target.value)}
-              placeholder="https://digarr.yourdomain.com/auth/spotify/callback" />
-            <p className="text-muted" style={{ fontSize: 11, marginTop: '0.25rem' }}>Must match exactly what you registered in your Spotify app dashboard.</p>
+            {(() => {
+              const suggested = `${window.location.origin}/auth/spotify/callback`;
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.35rem',
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 6,
+                    padding: '6px 10px', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                    <span style={{ flex: 1, color: 'var(--accent)' }}>{suggested}</span>
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px', flexShrink: 0 }}
+                      onClick={() => navigator.clipboard.writeText(suggested).catch(() => {})}>
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-muted" style={{ fontSize: 11, marginBottom: '0.4rem' }}>
+                    Register this URL exactly in your <strong>Spotify Developer Dashboard → Redirect URIs</strong>. Then paste it below.
+                  </p>
+                  <input type="text" value={config.spotify_redirect_uri || ''}
+                    onChange={e => handleChange('spotify_redirect_uri', e.target.value)}
+                    placeholder={suggested} />
+                  {config.spotify_redirect_uri && config.spotify_redirect_uri !== suggested && (
+                    <p style={{ fontSize: 11, color: '#ffb300', marginTop: '0.25rem' }}>
+                      ⚠ Value differs from your current URL — make sure both match in Spotify's dashboard.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </>}
       </div>
