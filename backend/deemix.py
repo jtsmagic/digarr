@@ -30,13 +30,27 @@ class DeemixClient:
 
     async def test_connection(self) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self.base_url}/api/settings")
-            r.raise_for_status()
-            data = r.json()
-            return {
-                "connected": True,
-                "version": data.get("settings", {}).get("version", ""),
-            }
+            # Try /api/settings first; fall back to root — different Deemix builds
+            # return different things (some return empty bodies, some return HTML).
+            for path in ("/api/settings", "/api/ping", "/"):
+                try:
+                    r = await client.get(f"{self.base_url}{path}")
+                    r.raise_for_status()
+                    try:
+                        data = r.json()
+                        version = (
+                            data.get("version")
+                            or data.get("settings", {}).get("version", "")
+                        )
+                    except Exception:
+                        data = {}
+                        version = ""
+                    return {"connected": True, "version": version}
+                except httpx.HTTPStatusError:
+                    raise
+                except Exception:
+                    continue
+        raise ConnectionError("Deemix did not respond on any known endpoint")
 
     async def search_track(self, artist: str, title: str) -> list[dict]:
         """Search Deezer via Deemix for a specific track. Returns up to 5 candidates."""
