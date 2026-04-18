@@ -47,7 +47,7 @@ from database import (
     update_playlist_spotify_result,
     update_playlist_jellyfin_result, update_playlist_navidrome_result,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
-    db_delete_import_jobs_for_playlist,
+    db_delete_import_jobs_for_playlist, db_delete_import_job,
     get_all_playlist_artist_names,
     # track_cache
     db_upsert_track_cache, db_search_track_cache, db_get_cache_stats, db_lookup_track_cache,
@@ -1006,6 +1006,7 @@ def get_import_job(job_id: str):
 @app.delete("/api/import/jobs/{job_id}")
 def dismiss_import_job(job_id: str):
     _jobs.pop(job_id, None)
+    db_delete_import_job(job_id)
     return {"ok": True}
 
 
