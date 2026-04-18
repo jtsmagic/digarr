@@ -768,7 +768,7 @@ export default function History() {
                         <span className="spinner" style={{ width: 8, height: 8 }} /> Importing…
                       </span>
                     ) : (
-                      <span className="badge badge-added">{pl.artists_added?.length || 0} new artists</span>
+                      <span className="badge badge-added" title={`${pl.artists_added?.length || 0} new artist${pl.artists_added?.length !== 1 ? 's' : ''} added since last refresh`} style={{ cursor: 'default' }}>{pl.artists_added?.length || 0} new artists</span>
                     )}
                     {pl.plex_playlist_id && (
                       <span className="badge" style={{ background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'default' }}
