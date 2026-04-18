@@ -263,6 +263,14 @@ class LidarrClient:
             return {"status": "album_not_found", "artist": artist_name, "album": None}
 
         if target.get("monitored"):
+            # Album already monitored — still search in case it was never successfully grabbed
+            try:
+                await self._post("/command", {"name": "AlbumSearch", "albumIds": [target["id"]]})
+                logger.info("AlbumSearch triggered for already-monitored %r / %r",
+                            artist_name, target.get("title"))
+            except Exception as exc:
+                logger.warning("AlbumSearch failed for already-monitored album_id=%s: %s",
+                               target.get("id"), exc)
             return {"status": "already_monitored", "artist": artist_name, "album": target.get("title")}
 
         album_title = await self._monitor_and_search_album(target)
