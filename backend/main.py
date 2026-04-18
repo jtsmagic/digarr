@@ -45,6 +45,7 @@ from database import (
     init_db, save_playlist, get_playlists, get_playlist,
     update_playlist_plex_result, update_playlist, update_playlist_import_results,
     update_playlist_spotify_result,
+    update_playlist_jellyfin_result, update_playlist_navidrome_result,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
     db_delete_import_jobs_for_playlist,
     get_all_playlist_artist_names,
@@ -61,6 +62,8 @@ from database import (
 from lidarr import LidarrClient
 from musicbrainz import lookup_track as mb_lookup_track
 from plex import PlexClient
+from jellyfin import JellyfinClient
+from navidrome import NavidromeClient
 from media_client import PlexMediaClient
 from download_client import LidarrDownloadClient
 from ai.claude import ClaudeProvider
@@ -654,6 +657,8 @@ def _new_job(playlist_name: str, total: int) -> dict:
         "results": [],
         "playlist_id": None,
         "plex_result": None,
+        "jellyfin_result": None,
+        "navidrome_result": None,
         "created_at": datetime.utcnow().isoformat(),
         "completed_at": None,
         "error": None,
@@ -677,7 +682,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     config = load_config()
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
 
-    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify"}
+    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome"}
 
     # Plex push first — it only needs the track list, not Lidarr results,
     # so the playlist appears in Plex immediately while artists are being added.
@@ -696,6 +701,35 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                 job["plex_result"] = {"matched": len(matched_keys), "total": total}
         except Exception as exc:
             logger.error("Plex push failed for job %s: %s", job_id, exc)
+
+    # Jellyfin push
+    if ("jellyfin" in targets and config.get("jellyfin_url") and config.get("jellyfin_api_key")
+            and req.tracks):
+        try:
+            jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
+            matched_ids, _, total = await jf.match_tracks(req.tracks)
+            if matched_ids:
+                jf_id = await jf.create_playlist(job["playlist_name"], matched_ids)
+                update_playlist_jellyfin_result(playlist_id, jf_id, len(matched_ids), total)
+                job["jellyfin_result"] = {"matched": len(matched_ids), "total": total}
+        except Exception as exc:
+            logger.error("Jellyfin push failed for job %s: %s", job_id, exc)
+
+    # Navidrome push
+    if ("navidrome" in targets and config.get("navidrome_url") and config.get("navidrome_username")
+            and req.tracks):
+        try:
+            nd = NavidromeClient(
+                config["navidrome_url"], config["navidrome_username"],
+                config.get("navidrome_password", ""),
+            )
+            matched_ids, _, total = await nd.match_tracks(req.tracks)
+            if matched_ids:
+                nd_id = await nd.create_playlist(job["playlist_name"], matched_ids)
+                update_playlist_navidrome_result(playlist_id, nd_id, len(matched_ids), total)
+                job["navidrome_result"] = {"matched": len(matched_ids), "total": total}
+        except Exception as exc:
+            logger.error("Navidrome push failed for job %s: %s", job_id, exc)
 
     # Spotify push — runs in parallel with Lidarr, same as Plex
     if "spotify" in targets and req.tracks:
@@ -1298,7 +1332,7 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
     source_url = pl.get("source_url")
     source_type = pl.get("source_type")
 
-    if not source_url or source_type not in ("url", "m3u_url", "listenbrainz", "similar", "discogs"):
+    if not source_url or source_type not in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify"):
         raise ValueError("No refreshable source URL")
 
     new_artists_dicts = []
@@ -1332,6 +1366,20 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
         if not token or not username:
             raise ValueError("Discogs username and token required. Add them in Settings.")
         data = await discogs_get_wantlist(token, username)
+        new_artists_dicts = data["artists"]
+        new_tracks = data["tracks"]
+
+    elif source_type == "spotify":
+        # source_url is "spotify:{playlist_id}" (from the Spotify tab import)
+        sp_playlist_id = source_url.split(":", 1)[1] if ":" in source_url else source_url
+        token = await get_oauth_token(config)
+        if not token:
+            client_id = config.get("spotify_client_id", "")
+            client_secret = config.get("spotify_client_secret", "")
+            if not client_id or not client_secret:
+                raise ValueError("Spotify not configured in Settings.")
+            token = await get_access_token(client_id, client_secret)
+        data = await fetch_playlist(sp_playlist_id, token)
         new_artists_dicts = data["artists"]
         new_tracks = data["tracks"]
 
@@ -1481,6 +1529,38 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
             except Exception as e:
                 logger.error("Auto Spotify sync failed for playlist %s: %s", playlist_id, e)
 
+    # Auto-sync Jellyfin if this playlist was previously pushed there
+    jellyfin_sync_result = None
+    if pl.get("jellyfin_playlist_id") and config.get("jellyfin_url") and config.get("jellyfin_api_key"):
+        try:
+            jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
+            matched_ids, _, total = await jf.match_tracks(tracks_to_save)
+            current_matched = pl.get("jellyfin_matched_count") or 0
+            if tracks_changed or len(matched_ids) > current_matched:
+                await jf.update_playlist(pl["jellyfin_playlist_id"], matched_ids)
+                update_playlist_jellyfin_result(playlist_id, pl["jellyfin_playlist_id"], len(matched_ids), total)
+                jellyfin_sync_result = {"matched": len(matched_ids), "total": total}
+        except Exception as e:
+            logger.error("Auto Jellyfin sync failed for playlist %s: %s", playlist_id, e)
+
+    # Auto-sync Navidrome if this playlist was previously pushed there
+    navidrome_sync_result = None
+    if (pl.get("navidrome_playlist_id") and config.get("navidrome_url")
+            and config.get("navidrome_username")):
+        try:
+            nd = NavidromeClient(
+                config["navidrome_url"], config["navidrome_username"],
+                config.get("navidrome_password", ""),
+            )
+            matched_ids, _, total = await nd.match_tracks(tracks_to_save)
+            current_matched = pl.get("navidrome_matched_count") or 0
+            if tracks_changed or len(matched_ids) > current_matched:
+                await nd.update_playlist(pl["navidrome_playlist_id"], pl["name"], matched_ids)
+                update_playlist_navidrome_result(playlist_id, pl["navidrome_playlist_id"], len(matched_ids), total)
+                navidrome_sync_result = {"matched": len(matched_ids), "total": total}
+        except Exception as e:
+            logger.error("Auto Navidrome sync failed for playlist %s: %s", playlist_id, e)
+
     return {
         "new_artists": net_new_names,
         "new_artists_added": len(newly_added),
@@ -1489,6 +1569,8 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
         "total_artists": len(existing_names),
         "plex_sync": plex_sync_result,
         "spotify_sync": spotify_sync_result,
+        "jellyfin_sync": jellyfin_sync_result,
+        "navidrome_sync": navidrome_sync_result,
     }
 
 @app.post("/api/playlists/{playlist_id}/refresh")
@@ -1496,7 +1578,7 @@ async def refresh_playlist(playlist_id: int):
     pl = get_playlist(playlist_id)
     if not pl:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    if not pl.get("source_url") or pl.get("source_type") not in ("url", "m3u_url", "listenbrainz", "similar", "discogs"):
+    if not pl.get("source_url") or pl.get("source_type") not in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify"):
         raise HTTPException(status_code=400, detail="This playlist has no refreshable source URL.")
     try:
         return await _do_refresh_playlist(playlist_id)
@@ -1830,6 +1912,110 @@ async def sync_all_plex():
 
     results = await asyncio.gather(*[sync_one(pl) for pl in full_playlists])
     return {"synced": len(results), "results": list(results)}
+
+
+# ---------------------------------------------------------------------------
+# Jellyfin endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/jellyfin/status")
+async def jellyfin_status():
+    config = load_config()
+    if not config.get("jellyfin_url") or not config.get("jellyfin_api_key"):
+        return {"configured": False}
+    try:
+        jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
+        info = await jf.test_connection()
+        return {"configured": True, **info}
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+@app.post("/api/jellyfin/playlist/{playlist_id}/sync")
+async def sync_jellyfin_playlist(playlist_id: int):
+    config = load_config()
+    if not config.get("jellyfin_url") or not config.get("jellyfin_api_key"):
+        raise HTTPException(status_code=400, detail="Jellyfin not configured. Add your Jellyfin URL and API key in Settings.")
+
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
+    tracks = pl.get("tracks", [])
+    matched_ids, unmatched, total = await jf.match_tracks(tracks)
+
+    if pl.get("jellyfin_playlist_id"):
+        await jf.update_playlist(pl["jellyfin_playlist_id"], matched_ids)
+        jellyfin_playlist_id = pl["jellyfin_playlist_id"]
+    else:
+        if not matched_ids:
+            raise HTTPException(status_code=400, detail="No tracks matched in Jellyfin — cannot create playlist.")
+        jellyfin_playlist_id = await jf.create_playlist(pl["name"], matched_ids)
+
+    update_playlist_jellyfin_result(playlist_id, jellyfin_playlist_id, len(matched_ids), total)
+    return {
+        "matched": len(matched_ids),
+        "total": total,
+        "jellyfin_playlist_id": jellyfin_playlist_id,
+        "unmatched": unmatched,
+        "message": f"{len(matched_ids)}/{total} tracks matched in Jellyfin",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Navidrome endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/navidrome/status")
+async def navidrome_status():
+    config = load_config()
+    if not config.get("navidrome_url") or not config.get("navidrome_username"):
+        return {"configured": False}
+    try:
+        nd = NavidromeClient(
+            config["navidrome_url"], config["navidrome_username"],
+            config.get("navidrome_password", ""),
+        )
+        info = await nd.test_connection()
+        return {"configured": True, **info}
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+@app.post("/api/navidrome/playlist/{playlist_id}/sync")
+async def sync_navidrome_playlist(playlist_id: int):
+    config = load_config()
+    if not config.get("navidrome_url") or not config.get("navidrome_username"):
+        raise HTTPException(status_code=400, detail="Navidrome not configured. Add your Navidrome URL and credentials in Settings.")
+
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    nd = NavidromeClient(
+        config["navidrome_url"], config["navidrome_username"],
+        config.get("navidrome_password", ""),
+    )
+    tracks = pl.get("tracks", [])
+    matched_ids, unmatched, total = await nd.match_tracks(tracks)
+
+    if pl.get("navidrome_playlist_id"):
+        await nd.update_playlist(pl["navidrome_playlist_id"], pl["name"], matched_ids)
+        navidrome_playlist_id = pl["navidrome_playlist_id"]
+    else:
+        if not matched_ids:
+            raise HTTPException(status_code=400, detail="No tracks matched in Navidrome — cannot create playlist.")
+        navidrome_playlist_id = await nd.create_playlist(pl["name"], matched_ids)
+
+    update_playlist_navidrome_result(playlist_id, navidrome_playlist_id, len(matched_ids), total)
+    return {
+        "matched": len(matched_ids),
+        "total": total,
+        "navidrome_playlist_id": navidrome_playlist_id,
+        "unmatched": unmatched,
+        "message": f"{len(matched_ids)}/{total} tracks matched in Navidrome",
+    }
 
 
 # ---------------------------------------------------------------------------

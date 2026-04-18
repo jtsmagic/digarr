@@ -19,6 +19,10 @@ export default function Settings() {
   const [plexSections, setPlexSections] = useState(null);
   const [loadingPlexSections, setLoadingPlexSections] = useState(false);
   const [spotifyStatus, setSpotifyStatus] = useState(null);
+  const [jellyfinStatus, setJellyfinStatus] = useState(null);
+  const [jellyfinTesting, setJellyfinTesting] = useState(false);
+  const [navidromeStatus, setNavidromeStatus] = useState(null);
+  const [navidromeTesting, setNavidromeTesting] = useState(false);
   const [spotifyDisconnecting, setSpotifyDisconnecting] = useState(false);
   const [refreshablePlaylists, setRefreshablePlaylists] = useState([]);
   const [openSections, setOpenSections] = useState(() => new Set(['general']));
@@ -203,6 +207,32 @@ export default function Settings() {
       setError(e.response?.data?.detail || 'Could not connect to Plex. Check your URL and token, then save before loading sections.');
     } finally {
       setLoadingPlexSections(false);
+    }
+  };
+
+  const handleTestJellyfin = async () => {
+    setJellyfinTesting(true);
+    setJellyfinStatus(null);
+    try {
+      const res = await axios.get('/api/jellyfin/status');
+      setJellyfinStatus(res.data);
+    } catch (e) {
+      setJellyfinStatus({ error: e.response?.data?.detail || 'Connection failed.' });
+    } finally {
+      setJellyfinTesting(false);
+    }
+  };
+
+  const handleTestNavidrome = async () => {
+    setNavidromeTesting(true);
+    setNavidromeStatus(null);
+    try {
+      const res = await axios.get('/api/navidrome/status');
+      setNavidromeStatus(res.data);
+    } catch (e) {
+      setNavidromeStatus({ error: e.response?.data?.detail || 'Connection failed.' });
+    } finally {
+      setNavidromeTesting(false);
     }
   };
 
@@ -754,6 +784,82 @@ export default function Settings() {
               ⟳ Refresh Library Cache
             </button>
           </div>
+        </>}
+      </div>
+
+      {/* Jellyfin */}
+      <div className="card">
+        <SectionTitle sectionKey="jellyfin">Jellyfin</SectionTitle>
+        {openSections.has('jellyfin') && <>
+          <div className="grid-2">
+            <div className="field">
+              <label>Jellyfin URL</label>
+              <input value={config.jellyfin_url || ''}
+                onChange={e => handleChange('jellyfin_url', e.target.value)}
+                placeholder="http://192.168.68.69:8096" />
+            </div>
+            <div className="field">
+              <label>API Key</label>
+              <input type="password" value={config.jellyfin_api_key || ''}
+                onChange={e => handleChange('jellyfin_api_key', e.target.value)}
+                placeholder="Your Jellyfin API key" />
+            </div>
+          </div>
+          <div style={{ marginBottom: '0.75rem' }}>
+            <button className="btn btn-ghost" onClick={handleTestJellyfin} disabled={jellyfinTesting}>
+              {jellyfinTesting ? <><span className="spinner" /> Connecting…</> : '⟳ Test Connection'}
+            </button>
+          </div>
+          {jellyfinStatus && (
+            <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+              {jellyfinStatus.error ? (
+                <span style={{ color: 'var(--red)' }}>✕ {jellyfinStatus.error}</span>
+              ) : (
+                <span style={{ color: 'var(--green)' }}>✓ Connected — {jellyfinStatus.server_name} v{jellyfinStatus.version}</span>
+              )}
+            </div>
+          )}
+        </>}
+      </div>
+
+      {/* Navidrome */}
+      <div className="card">
+        <SectionTitle sectionKey="navidrome">Navidrome</SectionTitle>
+        {openSections.has('navidrome') && <>
+          <div className="grid-2">
+            <div className="field">
+              <label>Navidrome URL</label>
+              <input value={config.navidrome_url || ''}
+                onChange={e => handleChange('navidrome_url', e.target.value)}
+                placeholder="http://192.168.68.69:4533" />
+            </div>
+            <div className="field">
+              <label>Username</label>
+              <input value={config.navidrome_username || ''}
+                onChange={e => handleChange('navidrome_username', e.target.value)}
+                placeholder="Your Navidrome username" />
+            </div>
+          </div>
+          <div className="field">
+            <label>Password</label>
+            <input type="password" value={config.navidrome_password || ''}
+              onChange={e => handleChange('navidrome_password', e.target.value)}
+              placeholder="Your Navidrome password" />
+          </div>
+          <div style={{ marginBottom: '0.75rem' }}>
+            <button className="btn btn-ghost" onClick={handleTestNavidrome} disabled={navidromeTesting}>
+              {navidromeTesting ? <><span className="spinner" /> Connecting…</> : '⟳ Test Connection'}
+            </button>
+          </div>
+          {navidromeStatus && (
+            <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+              {navidromeStatus.error ? (
+                <span style={{ color: 'var(--red)' }}>✕ {navidromeStatus.error}</span>
+              ) : (
+                <span style={{ color: 'var(--green)' }}>✓ Connected — Subsonic API v{navidromeStatus.version}</span>
+              )}
+            </div>
+          )}
         </>}
       </div>
 

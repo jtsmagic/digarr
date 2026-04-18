@@ -27,6 +27,8 @@ export default function Import() {
   const [bypassConflict, setBypassConflict] = useState(false);
   const [plexConfigured, setPlexConfigured] = useState(false);
   const [spotifyConfigured, setSpotifyConfigured] = useState(false);
+  const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
+  const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [syncTargets, setSyncTargets] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('syncTargets')) || ['plex', 'spotify']); }
     catch { return new Set(['plex', 'spotify']); }
@@ -39,6 +41,8 @@ export default function Import() {
       setSpotifyConfigured(r.data.connected);
       if (!r.data.connected) setInputType(t => t === 'spotify' ? 'url' : t);
     }).catch(() => {});
+    axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
+    axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       const d = r.data;
       setPlexConfigured(!!(d.plex_url && d.plex_token));
@@ -319,6 +323,8 @@ export default function Import() {
         <SpotifyImportTab
           spotifyConfigured={spotifyConfigured}
           plexConfigured={plexConfigured}
+          jellyfinConfigured={jellyfinConfigured}
+          navidromeConfigured={navidromeConfigured}
           onQueued={setQueuedJob}
         />
       ) : (
@@ -350,10 +356,15 @@ export default function Import() {
       )}
 
       {/* Sync targets — only shown when 2+ are configured, not needed for Spotify tab (handled internally) */}
-      {inputType !== 'spotify' && plexConfigured && spotifyConfigured && (
+      {inputType !== 'spotify' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 2 && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
-          {[{ id: 'plex', label: 'Plex' }, { id: 'spotify', label: 'Spotify' }].map(({ id, label }) => (
+          {[
+            { id: 'plex', label: 'Plex', show: plexConfigured },
+            { id: 'spotify', label: 'Spotify', show: spotifyConfigured },
+            { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
+            { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+          ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={syncTargets.has(id)}
                 onChange={e => setSyncTargets(prev => {
@@ -555,7 +566,7 @@ export default function Import() {
 // Spotify import tab
 // ---------------------------------------------------------------------------
 
-function SpotifyImportTab({ spotifyConfigured, plexConfigured, onQueued }) {
+function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigured, navidromeConfigured, onQueued }) {
   const [playlists, setPlaylists]         = useState(null);
   const [listsLoading, setListsLoading]   = useState(false);
   const [selectedPlaylist, setSelectedPlaylist] = useState('');
@@ -765,10 +776,14 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, onQueued }) {
                 <span style={{ fontSize: 13 }}>Add to scheduled refresh</span>
               </div>
 
-              {plexConfigured && spotifyConfigured && (
+              {[plexConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 1 && (
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
-                  {[{ id: 'plex', label: 'Plex' }, { id: 'spotify', label: 'Spotify' }].map(({ id, label }) => (
+                  {[
+                    { id: 'plex', label: 'Plex', show: plexConfigured },
+                    { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
+                    { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+                  ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}
                         onChange={e => setSyncTargets(prev => {
