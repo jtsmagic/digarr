@@ -1109,6 +1109,12 @@ async def parse_input(request: Request, req: ParseRequest):
     # Deduplicate artists by name (AI may return duplicates despite instructions)
     result["artists"] = deduplicate_artists(result.get("artists", []))
     result["playlist_name"] = req.playlist_name
+    usage = result.get("usage")
+    if usage:
+        db_increment_stat("tokens_input_total", usage.get("input_tokens", 0))
+        db_increment_stat("tokens_output_total", usage.get("output_tokens", 0))
+        db_increment_stat(f"tokens_input_{usage.get('provider', 'unknown')}", usage.get("input_tokens", 0))
+        db_increment_stat(f"tokens_output_{usage.get('provider', 'unknown')}", usage.get("output_tokens", 0))
     return result
 
 @app.post("/api/parse/upload")
@@ -1565,6 +1571,12 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                 result = await ai.extract_artists_and_tracks(content)
                 new_artists_dicts = deduplicate_artists(result.get("artists", []))
                 new_tracks = result.get("tracks", [])
+                usage = result.get("usage")
+                if usage:
+                    db_increment_stat("tokens_input_total", usage.get("input_tokens", 0))
+                    db_increment_stat("tokens_output_total", usage.get("output_tokens", 0))
+                    db_increment_stat(f"tokens_input_{usage.get('provider', 'unknown')}", usage.get("input_tokens", 0))
+                    db_increment_stat(f"tokens_output_{usage.get('provider', 'unknown')}", usage.get("output_tokens", 0))
 
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
     existing_lower = {a.lower() for a in (pl.get("artists") or [])}

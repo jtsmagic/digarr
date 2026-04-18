@@ -461,6 +461,12 @@ export default function Import() {
             </div>
           </div>
 
+          {parsed.usage && (
+            <div style={{ textAlign: 'right', fontSize: 10, color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+              {parsed.usage.provider} · {parsed.usage.model} · {parsed.usage.input_tokens?.toLocaleString()} in / {parsed.usage.output_tokens?.toLocaleString()} out tokens
+            </div>
+          )}
+
           {totalArtists === 0 && (
             <div className="alert alert-info">No artists found. Try a different input or check your source.</div>
           )}
