@@ -2364,15 +2364,16 @@ def get_slskd_flagged(playlist_id: int):
 
 
 class SlskdManualQueueRequest(BaseModel):
-    artist: str
-    title: str
-    username: str
-    filename: str
-    size: int = 0
+    artist: str = Field(max_length=500)
+    title: str = Field(max_length=500)
+    username: str = Field(max_length=200)
+    filename: str = Field(max_length=2000)
+    size: int = Field(default=0, ge=0)
 
 
 @app.post("/api/slskd/queue")
-async def slskd_manual_queue(req: SlskdManualQueueRequest):
+@limiter.limit("30/minute")
+async def slskd_manual_queue(req: SlskdManualQueueRequest, request: Request):
     """Manually queue a specific Soulseek file that was flagged for review."""
     config = load_config()
     if not config.get("slskd_url") or not config.get("slskd_api_key"):
