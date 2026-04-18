@@ -743,7 +743,9 @@ def _prune_completed_jobs():
         key=lambda j: j["created_at"],
     )
     while len(_jobs) > _MAX_COMPLETED_JOBS and done:
-        del _jobs[done.pop(0)["id"]]
+        job_id = done.pop(0)["id"]
+        del _jobs[job_id]
+        db_delete_import_job(job_id)
 
 
 async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
