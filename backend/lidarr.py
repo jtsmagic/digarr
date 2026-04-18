@@ -141,7 +141,9 @@ class LidarrClient:
         # monitored flag, but Lidarr only imports the completed download when monitored=True.
         # If RefreshArtist resets the flag after our PUT, the re-monitor ensures it's set
         # before the download finishes and Lidarr's import handler runs.
-        asyncio.create_task(self._remonitor_after_delay(album))
+        # Use the latest PUT result so the re-monitor doesn't overwrite fields Lidarr updated.
+        latest = result if isinstance(result, dict) and result.get("id") else album
+        asyncio.create_task(self._remonitor_after_delay(latest))
 
         try:
             await self._post("/command", {"name": "AlbumSearch", "albumIds": [album["id"]]})
