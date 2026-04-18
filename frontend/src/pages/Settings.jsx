@@ -741,7 +741,8 @@ export default function Settings() {
         <SectionTitle sectionKey="discogs">Discogs <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}>optional — Discover page</span></SectionTitle>
         {openSections.has('discogs') && <>
           <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Import your Discogs wantlist on the Discover page. Generate a personal access token at <strong>discogs.com/settings/developers</strong>.
+            Import your Discogs wantlist on the Discover page. Generate a personal access token at{' '}
+            <a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>discogs.com/settings/developers</a>.
           </p>
           <div className="grid-2">
             <div className="field">
