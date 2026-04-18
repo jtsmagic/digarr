@@ -1065,8 +1065,7 @@ export default function Settings() {
         <SectionTitle sectionKey="deemix">Deemix</SectionTitle>
         {openSections.has('deemix') && <>
           <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Connect a self-hosted <a href="https://deemix.app" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>Deemix</a> instance
-            to automatically queue playlist tracks to Deezer/downloads during import.
+            Connect a self-hosted Deemix instance to automatically queue playlist tracks to Deezer/downloads during import.
           </p>
           <div className="field">
             <label>Deemix URL</label>
