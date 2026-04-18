@@ -139,7 +139,7 @@ class SlskdClient:
             data = r.json()
             return {
                 "connected": True,
-                "version": data.get("version", ""),
+                "version": (data.get("version") or {}).get("current", ""),
             }
 
     async def _start_search(self, query: str) -> str:
