@@ -1084,7 +1084,7 @@ export default function History() {
                                     {visibleRows.length > 0 && (
                                       <table className="table" style={{ fontSize: 12 }}>
                                         <thead>
-                                          <tr><th>Artist</th><th>Title</th><th style={{ width: 140 }}></th></tr>
+                                          <tr><th>Artist</th><th>Title</th><th>Album</th><th style={{ width: 140 }}></th></tr>
                                         </thead>
                                         <tbody>
                                           {visibleRows.map((t, i) => {
@@ -1106,6 +1106,7 @@ export default function History() {
                                                   )}
                                                 </td>
                                                 <td>{t.title && t.title !== 'null' ? t.title : '—'}</td>
+                                                <td className="text-muted">{t.album && t.album !== 'null' ? t.album : '—'}</td>
                                                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                                                   {isIgnored ? (
                                                     <button
