@@ -125,12 +125,39 @@ class LidarrClient:
     async def _monitor_and_search_album(self, album: dict) -> str:
         """Mark one album monitored and trigger a search. Returns the album title."""
         updated = {**album, "monitored": True}
-        await self._put(f"/album/{album['id']}", updated)
+        result = await self._put(f"/album/{album['id']}", updated)
+
+        # Lidarr's initial RefreshArtist job (queued on artist add) can race with this PUT
+        # and reset the monitored flag. Verify the response and retry once if it didn't stick.
+        if isinstance(result, dict) and not result.get("monitored"):
+            logger.warning("Album %r (id=%s): PUT returned monitored=False — retrying",
+                           album.get("title"), album["id"])
+            result = await self._put(f"/album/{album['id']}", {**result, "monitored": True})
+            if isinstance(result, dict) and not result.get("monitored"):
+                logger.error("Album %r (id=%s): monitored still False after retry",
+                             album.get("title"), album["id"])
+
+        # Fire a background re-monitor after a delay: AlbumSearch can grab regardless of the
+        # monitored flag, but Lidarr only imports the completed download when monitored=True.
+        # If RefreshArtist resets the flag after our PUT, the re-monitor ensures it's set
+        # before the download finishes and Lidarr's import handler runs.
+        asyncio.create_task(self._remonitor_after_delay(album))
+
         try:
             await self._post("/command", {"name": "AlbumSearch", "albumIds": [album["id"]]})
         except Exception as exc:
             logger.warning("AlbumSearch command failed for album_id=%d: %s", album["id"], exc)
         return album.get("title", "")
+
+    async def _remonitor_after_delay(self, album: dict, delay: float = 30.0) -> None:
+        """Re-set monitored=True after a delay to survive Lidarr's background RefreshArtist."""
+        await asyncio.sleep(delay)
+        try:
+            await self._put(f"/album/{album['id']}", {**album, "monitored": True})
+            logger.info("Re-monitored album %r (id=%s) after %.0fs delay",
+                        album.get("title"), album["id"], delay)
+        except Exception as exc:
+            logger.debug("Background re-monitor for album_id=%s failed: %s", album.get("id"), exc)
 
     def _find_album_by_hint(self, albums: list, hint: str) -> Optional[dict]:
         norm = _normalize(hint)
