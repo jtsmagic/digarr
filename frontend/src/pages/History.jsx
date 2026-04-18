@@ -44,6 +44,7 @@ export default function History() {
   const [blocklistSaving, setBlocklistSaving] = useState(false);
   const [wantedData, setWantedData] = useState(null);
   const [wantedLoading, setWantedLoading] = useState(false);
+  const [lidarrConfigured, setLidarrConfigured] = useState(false);
   const [importJobs, setImportJobs] = useState([]);
   const completedJobIds = useRef(new Set());
 
@@ -74,6 +75,7 @@ export default function History() {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
       setGlobalMerge(r.data.refresh_merge_tracks || false);
+      setLidarrConfigured(!!(r.data.lidarr_url && r.data.lidarr_api_key));
     }).catch(() => {});
     axios.get('/api/scheduler/status').then(r => setSchedulerStatus(r.data)).catch(() => {});
     axios.get('/api/playlists').then(r => {
@@ -1243,8 +1245,8 @@ export default function History() {
         </div>
       )}
 
-      {/* Wanted / Missing */}
-      <div className="card" style={{ marginTop: '2rem' }}>
+      {/* Wanted / Missing — Lidarr only */}
+      {lidarrConfigured && <div className="card" style={{ marginTop: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
           <div className="card-title" style={{ marginBottom: 0 }}>Wanted / Missing</div>
           <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={handleLoadWanted} disabled={wantedLoading}>
@@ -1289,7 +1291,7 @@ export default function History() {
             </div>
           )
         )}
-      </div>
+      </div>}
 
       {/* Artist Blocklist */}
       <div className="card" style={{ marginTop: '2rem' }}>
