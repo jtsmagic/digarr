@@ -43,7 +43,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from database import (
     init_db, save_playlist, get_playlists, get_playlist,
-    update_playlist_plex_result, update_playlist, update_playlist_import_results,
+    update_playlist_plex_result, update_playlist, update_playlist_tracks, update_playlist_import_results,
     update_playlist_spotify_result,
     update_playlist_jellyfin_result, update_playlist_navidrome_result,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
@@ -874,6 +874,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                     mb = await mb_lookup_track(artist_name, track_title)
                     if mb.get("album"):
                         album_hint = mb["album"]
+                        album_hint_map[artist_name] = album_hint  # persist for track back-fill
                     if mb.get("canonical_artist"):
                         resolved = mb["canonical_artist"]
                 result = await asyncio.wait_for(
@@ -891,6 +892,19 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
 
     job["results"] = results
     job["current_artist"] = None
+
+    # Back-fill album names onto tracks that had null album, using MB-derived hints.
+    # This enriches the stored track list so future Plex syncs can show the album column.
+    enriched_tracks = [
+        {**t, "album": album_hint_map[t.get("artist", "")]}
+        if (not t.get("album") or t.get("album") in ("null", None))
+           and t.get("artist", "") in album_hint_map
+        else t
+        for t in req.tracks
+    ]
+    if any(e.get("album") and t.get("album") != e.get("album")
+           for t, e in zip(req.tracks, enriched_tracks)):
+        update_playlist_tracks(playlist_id, enriched_tracks)
 
     # Update the playlist with final Lidarr results
     try:

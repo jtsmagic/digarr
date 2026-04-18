@@ -439,6 +439,13 @@ def update_playlist(playlist_id: int, artists: list, tracks: list, artists_added
     conn.commit()
     conn.close()
 
+def update_playlist_tracks(playlist_id: int, tracks: list) -> None:
+    conn = get_db()
+    conn.execute("UPDATE playlists SET tracks = ? WHERE id = ?",
+                 (json.dumps(tracks), playlist_id))
+    conn.commit()
+    conn.close()
+
 def set_playlist_merge_tracks(playlist_id: int, value) -> None:
     conn = get_db()
     c = conn.cursor()
