@@ -17,6 +17,7 @@ export default function Import() {
   const [parseStatus, setParseStatus] = useState('');
   const [error, setError] = useState(null);
   const [parsed, setParsed] = useState(null);
+  const [parseUsage, setParseUsage] = useState(null);
   const [queuedJob, setQueuedJob] = useState(null); // { job_id, playlist_id, name }
   const [dragOver, setDragOver] = useState(false);
   const [trackStatuses, setTrackStatuses] = useState({});
@@ -142,6 +143,7 @@ export default function Import() {
     setLoading(true);
     setParseStatus(inputType === 'url' ? 'Fetching page…' : 'Reading input…');
     setError(null);
+    setParseUsage(null);
     resetState();
     try {
       await new Promise(r => setTimeout(r, 400));
@@ -153,6 +155,7 @@ export default function Import() {
       });
       setParseStatus('Checking library…');
       setParsed(res.data);
+      if (res.data.usage) setParseUsage(res.data.usage);
       await Promise.all([
         checkLidarrArtists(res.data.artists),
         fetchTrackStatuses(res.data.tracks),
@@ -424,6 +427,12 @@ export default function Import() {
 
       {inputType !== 'spotify' && error && <div className="alert alert-error mt-2">{error}</div>}
 
+      {parseUsage && !loading && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: '0.4rem', textAlign: 'right' }}>
+          {parseUsage.provider} · {parseUsage.model} · {parseUsage.input_tokens?.toLocaleString()} in / {parseUsage.output_tokens?.toLocaleString()} out tokens
+        </div>
+      )}
+
       {/* Queued confirmation banner */}
       {queuedJob && (
         <div style={{ marginTop: '1rem', background: 'rgba(76,175,80,0.1)', border: '1px solid var(--green)', borderRadius: 8, padding: '0.9rem 1.1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
@@ -460,12 +469,6 @@ export default function Import() {
               <div className="stat-label">Already in Library</div>
             </div>
           </div>
-
-          {parsed.usage && (
-            <div style={{ textAlign: 'right', fontSize: 10, color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              {parsed.usage.provider} · {parsed.usage.model} · {parsed.usage.input_tokens?.toLocaleString()} in / {parsed.usage.output_tokens?.toLocaleString()} out tokens
-            </div>
-          )}
 
           {totalArtists === 0 && (
             <div className="alert alert-info">No artists found. Try a different input or check your source.</div>
