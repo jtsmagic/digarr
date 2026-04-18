@@ -814,6 +814,8 @@ export default function Settings() {
             <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
               {jellyfinStatus.error ? (
                 <span style={{ color: 'var(--red)' }}>✕ {jellyfinStatus.error}</span>
+              ) : !jellyfinStatus.configured ? (
+                <span style={{ color: 'var(--text-muted)' }}>Enter a URL and API key above, then save before testing.</span>
               ) : (
                 <span style={{ color: 'var(--green)' }}>✓ Connected — {jellyfinStatus.server_name} v{jellyfinStatus.version}</span>
               )}
@@ -855,6 +857,8 @@ export default function Settings() {
             <div style={{ fontSize: 12, marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
               {navidromeStatus.error ? (
                 <span style={{ color: 'var(--red)' }}>✕ {navidromeStatus.error}</span>
+              ) : !navidromeStatus.configured ? (
+                <span style={{ color: 'var(--text-muted)' }}>Enter a URL and credentials above, then save before testing.</span>
               ) : (
                 <span style={{ color: 'var(--green)' }}>✓ Connected — Subsonic API v{navidromeStatus.version}</span>
               )}
