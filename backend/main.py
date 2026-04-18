@@ -43,7 +43,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from database import (
     init_db, save_playlist, get_playlists, get_playlist,
-    update_playlist_plex_result, update_playlist, update_playlist_tracks, update_playlist_import_results,
+    update_playlist_plex_result, update_playlist, update_playlist_tracks, update_plex_unmatched_tracks, update_playlist_import_results,
     update_playlist_spotify_result,
     update_playlist_jellyfin_result, update_playlist_navidrome_result,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
@@ -841,6 +841,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     # Build album hint and first-track maps from track list
     album_hint_map: dict = {}
     first_track_map: dict = {}
+    canonical_map: dict = {}
     for t in req.tracks:
         artist = t.get("artist", "")
         if not artist:
@@ -850,11 +851,22 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
         if t.get("title") and artist not in first_track_map:
             first_track_map[artist] = t["title"]
 
+    # MB enrichment pass — runs for every null-album artist regardless of Lidarr config.
+    # Rate-limited internally to 1 req/sec. Populates album_hint_map and canonical_map
+    # before the Lidarr loop so album data is available for both Lidarr and DB back-fill.
+    artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
+    for artist_name in artist_names:
+        if artist_name not in album_hint_map and artist_name in first_track_map:
+            mb = await mb_lookup_track(artist_name, first_track_map[artist_name])
+            if mb.get("album"):
+                album_hint_map[artist_name] = mb["album"]
+            if mb.get("canonical_artist"):
+                canonical_map[artist_name] = mb["canonical_artist"]
+
     lidarr_ok = bool(config.get("lidarr_url") and config.get("lidarr_api_key"))
     lidarr_client = make_lidarr_client(config) if lidarr_ok else None
 
     results = []
-    artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
 
     for i, artist_name in enumerate(artist_names):
         job["current"] = i + 1
@@ -868,15 +880,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                           "message": f"{artist_name} is on your blocklist", "album_monitored": None}
             else:
                 album_hint = album_hint_map.get(artist_name)
-                track_title = first_track_map.get(artist_name)
-                resolved = artist_name
-                if track_title and not album_hint:
-                    mb = await mb_lookup_track(artist_name, track_title)
-                    if mb.get("album"):
-                        album_hint = mb["album"]
-                        album_hint_map[artist_name] = album_hint  # persist for track back-fill
-                    if mb.get("canonical_artist"):
-                        resolved = mb["canonical_artist"]
+                resolved = canonical_map.get(artist_name, artist_name)
                 result = await asyncio.wait_for(
                     lidarr_client.add_artist(resolved, album_hint=album_hint),
                     timeout=45.0,
@@ -893,18 +897,29 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     job["results"] = results
     job["current_artist"] = None
 
-    # Back-fill album names onto tracks that had null album, using MB-derived hints.
-    # This enriches the stored track list so future Plex syncs can show the album column.
-    enriched_tracks = [
-        {**t, "album": album_hint_map[t.get("artist", "")]}
-        if (not t.get("album") or t.get("album") in ("null", None))
-           and t.get("artist", "") in album_hint_map
-        else t
-        for t in req.tracks
-    ]
-    if any(e.get("album") and t.get("album") != e.get("album")
-           for t, e in zip(req.tracks, enriched_tracks)):
-        update_playlist_tracks(playlist_id, enriched_tracks)
+    # Back-fill album names onto tracks that had null album using MB-derived hints,
+    # and patch plex_unmatched_tracks so History shows the album column immediately
+    # (the Plex sync runs before this point and stores null albums).
+    def _enrich(track_list):
+        return [
+            {**t, "album": album_hint_map[t.get("artist", "")]}
+            if (not t.get("album") or t.get("album") in ("null", None))
+               and t.get("artist", "") in album_hint_map
+            else t
+            for t in track_list
+        ]
+
+    if album_hint_map:
+        enriched_tracks = _enrich(req.tracks)
+        if any(e.get("album") != t.get("album") for t, e in zip(req.tracks, enriched_tracks)):
+            update_playlist_tracks(playlist_id, enriched_tracks)
+
+        pl_now = get_playlist(playlist_id)
+        if pl_now and pl_now.get("plex_unmatched_tracks"):
+            enriched_unmatched = _enrich(pl_now["plex_unmatched_tracks"])
+            if any(e.get("album") != t.get("album")
+                   for t, e in zip(pl_now["plex_unmatched_tracks"], enriched_unmatched)):
+                update_plex_unmatched_tracks(playlist_id, enriched_unmatched)
 
     # Update the playlist with final Lidarr results
     try:

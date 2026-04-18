@@ -446,6 +446,13 @@ def update_playlist_tracks(playlist_id: int, tracks: list) -> None:
     conn.commit()
     conn.close()
 
+def update_plex_unmatched_tracks(playlist_id: int, unmatched: list) -> None:
+    conn = get_db()
+    conn.execute("UPDATE playlists SET plex_unmatched_tracks = ? WHERE id = ?",
+                 (json.dumps(unmatched), playlist_id))
+    conn.commit()
+    conn.close()
+
 def set_playlist_merge_tracks(playlist_id: int, value) -> None:
     conn = get_db()
     c = conn.cursor()
