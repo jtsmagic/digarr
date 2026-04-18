@@ -37,8 +37,17 @@ class OpenAIProvider:
         except json.JSONDecodeError:
             data = {"artists": [], "tracks": []}
 
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+
         return {
             "artists": data.get("artists", []),
             "tracks": data.get("tracks", []),
             "raw_source": content[:500],
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "provider": "openai",
+                "model": self.model,
+            },
         }

@@ -67,9 +67,18 @@ class ClaudeProvider:
         except json.JSONDecodeError:
             data = {"artists": [], "tracks": []}
 
+        input_tokens = message.usage.input_tokens
+        output_tokens = message.usage.output_tokens
+
         return {
             "artists": data.get("artists", []),
             "tracks": data.get("tracks", []),
             "raw_source": content[:500],
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "provider": "claude",
+                "model": self.model,
+            },
         }
 
