@@ -152,9 +152,18 @@ class SlskdClient:
             r.raise_for_status()
             return r.json().get("id", "")
 
+    async def _fetch_responses(self, client: httpx.AsyncClient, search_id: str) -> list[dict]:
+        r = await client.get(
+            f"{self.base_url}/api/v0/searches/{search_id}/responses",
+            headers=self._headers(),
+        )
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        return r.json() or []
+
     async def _poll_search(self, search_id: str) -> list[dict]:
         deadline = asyncio.get_event_loop().time() + _SEARCH_TIMEOUT
-        last_responses: list[dict] = []
         async with httpx.AsyncClient(timeout=10) as client:
             while asyncio.get_event_loop().time() < deadline:
                 r = await client.get(
@@ -165,14 +174,16 @@ class SlskdClient:
                     return []
                 r.raise_for_status()
                 data = r.json()
-                state = data.get("state", "")
-                last_responses = data.get("responses") or []
-                if state in ("Completed", "TimedOut", "Cancelled"):
-                    logger.info("slskd search %s done (state=%s, responses=%d)", search_id[:8], state, len(last_responses))
-                    return last_responses
+                if data.get("isComplete"):
+                    state = data.get("state", "")
+                    responses = await self._fetch_responses(client, search_id)
+                    logger.info("slskd search %s done (state=%s, responses=%d)", search_id[:8], state, len(responses))
+                    return responses
                 await asyncio.sleep(_POLL_INTERVAL)
-        logger.warning("slskd search %s timed out locally, returning %d partial responses", search_id[:8], len(last_responses))
-        return last_responses
+        # Deadline exceeded — fetch whatever slskd has
+        logger.warning("slskd search %s timed out locally, fetching partial responses", search_id[:8])
+        async with httpx.AsyncClient(timeout=10) as client:
+            return await self._fetch_responses(client, search_id)
 
     async def _queue_download(self, username: str, file: dict) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
