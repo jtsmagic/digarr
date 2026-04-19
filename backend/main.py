@@ -46,6 +46,7 @@ from database import (
     update_playlist_plex_result, update_playlist, update_playlist_tracks, update_plex_unmatched_tracks, update_playlist_import_results,
     update_playlist_spotify_result,
     update_playlist_jellyfin_result, update_playlist_navidrome_result,
+    update_playlist_last_refresh_artists,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
     db_delete_import_jobs_for_playlist, db_delete_import_job,
     get_all_playlist_artist_names,
@@ -1589,12 +1590,31 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
         if name and name.lower() not in existing_lower and normalize(name) not in blocklist:
             net_new_names.append(name)
 
+    # Build album hint map from new tracks (mirrors import path)
+    album_hint_map: dict = {}
+    first_track_map: dict = {}
+    for t in new_tracks:
+        artist = t.get("artist", "")
+        if not artist:
+            continue
+        if t.get("album") and t["album"] not in ("null", None) and artist not in album_hint_map:
+            album_hint_map[artist] = t["album"]
+        if t.get("title") and artist not in first_track_map:
+            first_track_map[artist] = t["title"]
+
+    # MB enrichment for net-new artists that don't have an album hint yet
+    for artist_name in net_new_names:
+        if artist_name not in album_hint_map and artist_name in first_track_map:
+            mb = await mb_lookup_track(artist_name, first_track_map[artist_name])
+            if mb.get("album"):
+                album_hint_map[artist_name] = mb["album"]
+
     lidarr_results = []
     if net_new_names and config.get("lidarr_url") and config.get("lidarr_api_key"):
         lidarr = make_lidarr_client(config)
         library = await lidarr.get_all_artists()
         raw = await asyncio.gather(
-            *[lidarr.add_artist(name, _library=library) for name in net_new_names],
+            *[lidarr.add_artist(name, album_hint=album_hint_map.get(name), _library=library) for name in net_new_names],
             return_exceptions=True,
         )
         lidarr_results = [
@@ -1643,7 +1663,22 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
     }
     tracks_changed = old_track_keys != new_track_keys
 
+    # Back-fill album names on tracks that lack them (matches import enrichment logic)
+    if album_hint_map:
+        def _enrich_tracks(track_list):
+            return [
+                {**t, "album": album_hint_map[t.get("artist", "")]}
+                if (not t.get("album") or t.get("album") in ("null", None))
+                   and t.get("artist", "") in album_hint_map
+                else t
+                for t in track_list
+            ]
+        enriched = _enrich_tracks(tracks_to_save)
+        if any(e.get("album") != t.get("album") for t, e in zip(tracks_to_save, enriched)):
+            tracks_to_save = enriched
+
     update_playlist(playlist_id, existing_names, tracks_to_save, all_artists_added)
+    update_playlist_last_refresh_artists(playlist_id, net_new_names)
     touch_playlist_refreshed(playlist_id)
     config = load_config()
     if config.get("playlist_export_path"):
@@ -1665,6 +1700,14 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                         pass
                 plex_name = _plex_playlist_name(pl["name"], config)
                 new_plex_id = await plex_client.create_playlist(plex_name, matched_keys)
+                if album_hint_map:
+                    unmatched = [
+                        {**t, "album": album_hint_map[t.get("artist", "")]}
+                        if (not t.get("album") or t.get("album") in ("null", None))
+                           and t.get("artist", "") in album_hint_map
+                        else t
+                        for t in unmatched
+                    ]
                 update_playlist_plex_result(playlist_id, new_plex_id, len(matched_keys), total, unmatched, plex_playlist_name=plex_name)
                 plex_sync_result = {
                     "matched": len(matched_keys),

@@ -188,6 +188,7 @@ def init_db():
         ("slskd_flagged_count", "INTEGER"),
         ("slskd_total_count", "INTEGER"),
         ("slskd_flagged_tracks", "TEXT"),
+        ("last_refresh_new_artists", "TEXT"),
     ]:
         try:
             c.execute(f"ALTER TABLE playlists ADD COLUMN {col} {typedef}")
@@ -326,7 +327,8 @@ def get_playlists() -> list:
                         jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
                         navidrome_playlist_id, navidrome_matched_count, navidrome_total_count,
                         deemix_queued_count, deemix_total_count,
-                        slskd_queued_count, slskd_flagged_count, slskd_total_count
+                        slskd_queued_count, slskd_flagged_count, slskd_total_count,
+                        last_refresh_new_artists
                  FROM playlists ORDER BY created_at DESC""")
     rows = c.fetchall()
     conn.close()
@@ -336,6 +338,7 @@ def get_playlists() -> list:
         d["artists_added"] = json.loads(d["artists_added"] or "[]")
         d["plex_unmatched_tracks"] = json.loads(d["plex_unmatched_tracks"] or "[]")
         d["lidarr_results"] = json.loads(d["lidarr_results"] or "[]")
+        d["last_refresh_new_artists"] = json.loads(d["last_refresh_new_artists"] or "null") if d.get("last_refresh_new_artists") else None
         result.append(d)
     return result
 
@@ -415,6 +418,14 @@ def update_playlist_navidrome_result(
         "UPDATE playlists SET navidrome_playlist_id = ?, navidrome_matched_count = ?, navidrome_total_count = ? WHERE id = ?",
         (navidrome_playlist_id, matched_count, total_count, playlist_id),
     )
+    conn.commit()
+    conn.close()
+
+
+def update_playlist_last_refresh_artists(playlist_id: int, new_artists: list) -> None:
+    conn = get_db()
+    conn.execute("UPDATE playlists SET last_refresh_new_artists = ? WHERE id = ?",
+                 (json.dumps(new_artists), playlist_id))
     conn.commit()
     conn.close()
 

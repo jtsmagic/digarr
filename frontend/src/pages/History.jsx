@@ -60,6 +60,8 @@ export default function History() {
   const [manualMatches, setManualMatches] = useState({}); // { "artist||title" → matched track }
   const [ignoredTracks, setIgnoredTracks] = useState(new Set()); // Set of "artist_lower||title_lower"
   const [expandedIgnored, setExpandedIgnored] = useState({}); // { playlistId → bool }
+  const [expandedBadge, setExpandedBadge] = useState({}); // { plId: 'plex'|'jellyfin'|'navidrome'|null }
+  const [trackDetails, setTrackDetails] = useState({}); // { plId: { tracks, plex_unmatched_tracks } }
 
   // Close overflow menu on any outside click
   useEffect(() => {
@@ -196,6 +198,22 @@ export default function History() {
       await axios.delete('/api/library/ignore-track', { data: { artist: track.artist || '', title: track.title || '' } });
     } catch {
       setIgnoredTracks(prev => new Set([...prev, key]));
+    }
+  };
+
+  const handleToggleBadge = async (e, pl, source) => {
+    e.stopPropagation();
+    const current = expandedBadge[pl.id];
+    if (current === source) {
+      setExpandedBadge(prev => ({ ...prev, [pl.id]: null }));
+      return;
+    }
+    setExpandedBadge(prev => ({ ...prev, [pl.id]: source }));
+    if (!trackDetails[pl.id]) {
+      try {
+        const res = await axios.get(`/api/playlists/${pl.id}`);
+        setTrackDetails(prev => ({ ...prev, [pl.id]: res.data }));
+      } catch {}
     }
   };
 
@@ -762,37 +780,45 @@ const handlePushToSpotify = async (pl) => {
                       <span className="badge" style={{ background: 'rgba(var(--accent-rgb,99,102,241),0.15)', color: 'var(--accent)', fontSize: 10, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                         <span className="spinner" style={{ width: 8, height: 8 }} /> Importing…
                       </span>
-                    ) : (
-                      <span className="badge badge-added" title={`${pl.artists_added?.length || 0} new artist${pl.artists_added?.length !== 1 ? 's' : ''} added since last refresh`} style={{ cursor: 'default' }}>{pl.artists_added?.length || 0} new artists</span>
-                    )}
+                    ) : (() => {
+                      const newCount = pl.last_refresh_new_artists != null
+                        ? pl.last_refresh_new_artists.length
+                        : (pl.artists_added?.length || 0);
+                      const tooltip = pl.last_refresh_new_artists != null
+                        ? `${newCount} new artist${newCount !== 1 ? 's' : ''} found in last refresh`
+                        : `${newCount} new artist${newCount !== 1 ? 's' : ''} added on import`;
+                      return (
+                        <span className="badge badge-added" title={tooltip} style={{ cursor: 'default' }}>{newCount} new artists</span>
+                      );
+                    })()}
                     {pl.plex_playlist_id && (
-                      <span className="badge" style={{ background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'default' }}
-                        title={pl.plex_matched_count != null
-                          ? `${pl.plex_matched_count} of ${pl.plex_total_count} tracks matched in Plex`
-                          : 'Playlist exists in Plex'}>
+                      <span className="badge" style={{ background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'pointer', userSelect: 'none' }}
+                        title={pl.plex_matched_count != null ? `${pl.plex_matched_count} of ${pl.plex_total_count} tracks matched in Plex — click to see` : 'Playlist exists in Plex'}
+                        onClick={e => handleToggleBadge(e, pl, 'plex')}>
                         {pl.plex_matched_count != null
                           ? `Plex: ${pl.plex_matched_count}/${pl.plex_total_count} tracks`
                           : 'In Plex'}
+                        {' '}{expandedBadge[pl.id] === 'plex' ? '▲' : '▼'}
                       </span>
                     )}
                     {pl.jellyfin_playlist_id && (
-                      <span className="badge" style={{ background: '#00a4dc', color: '#fff', fontSize: 10, cursor: 'default' }}
-                        title={pl.jellyfin_matched_count != null
-                          ? `${pl.jellyfin_matched_count} of ${pl.jellyfin_total_count} tracks matched in Jellyfin`
-                          : 'Playlist exists in Jellyfin'}>
+                      <span className="badge" style={{ background: '#00a4dc', color: '#fff', fontSize: 10, cursor: 'pointer', userSelect: 'none' }}
+                        title={pl.jellyfin_matched_count != null ? `${pl.jellyfin_matched_count} of ${pl.jellyfin_total_count} tracks matched in Jellyfin — click to see` : 'Playlist exists in Jellyfin'}
+                        onClick={e => handleToggleBadge(e, pl, 'jellyfin')}>
                         {pl.jellyfin_matched_count != null
                           ? `Jellyfin: ${pl.jellyfin_matched_count}/${pl.jellyfin_total_count}`
                           : 'In Jellyfin'}
+                        {' '}{expandedBadge[pl.id] === 'jellyfin' ? '▲' : '▼'}
                       </span>
                     )}
                     {pl.navidrome_playlist_id && (
-                      <span className="badge" style={{ background: '#fc6e51', color: '#fff', fontSize: 10, cursor: 'default' }}
-                        title={pl.navidrome_matched_count != null
-                          ? `${pl.navidrome_matched_count} of ${pl.navidrome_total_count} tracks matched in Navidrome`
-                          : 'Playlist exists in Navidrome'}>
+                      <span className="badge" style={{ background: '#fc6e51', color: '#fff', fontSize: 10, cursor: 'pointer', userSelect: 'none' }}
+                        title={pl.navidrome_matched_count != null ? `${pl.navidrome_matched_count} of ${pl.navidrome_total_count} tracks matched in Navidrome — click to see` : 'Playlist exists in Navidrome'}
+                        onClick={e => handleToggleBadge(e, pl, 'navidrome')}>
                         {pl.navidrome_matched_count != null
                           ? `Navidrome: ${pl.navidrome_matched_count}/${pl.navidrome_total_count}`
                           : 'In Navidrome'}
+                        {' '}{expandedBadge[pl.id] === 'navidrome' ? '▲' : '▼'}
                       </span>
                     )}
 
@@ -969,6 +995,63 @@ const handlePushToSpotify = async (pl) => {
                     )}
                   </div>
                 </div>
+
+                {/* Badge-expanded matched tracks panel */}
+                {expandedBadge[pl.id] && (
+                  <div onClick={e => e.stopPropagation()} style={{ marginTop: '0.75rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+                    {!trackDetails[pl.id] ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 12, color: 'var(--text-muted)' }}>
+                        <span className="spinner" style={{ width: 12, height: 12 }} /> Loading tracks…
+                      </div>
+                    ) : (() => {
+                      const source = expandedBadge[pl.id];
+                      const allTracks = trackDetails[pl.id]?.tracks || [];
+                      const syncResult = syncStates[pl.id]?.result;
+                      const unmatchedTracks = syncResult?.unmatched ?? pl.plex_unmatched_tracks ?? [];
+                      const unmatchedKeys = new Set(
+                        unmatchedTracks.map(t => `${(t.artist||'').toLowerCase()}||${(t.title||'').toLowerCase()}`)
+                      );
+                      // For Plex we have unmatched data; compute matched by exclusion.
+                      // For Jellyfin/Navidrome we don't store unmatched, so show all tracks.
+                      const hasPlex = source === 'plex' && (pl.plex_unmatched_tracks?.length > 0 || pl.plex_matched_count != null);
+                      const matchedTracks = hasPlex
+                        ? allTracks.filter(t => !unmatchedKeys.has(`${(t.artist||'').toLowerCase()}||${(t.title||'').toLowerCase()}`))
+                        : allTracks;
+                      const matchedCount = source === 'plex' ? (pl.plex_matched_count ?? matchedTracks.length)
+                        : source === 'jellyfin' ? (pl.jellyfin_matched_count ?? matchedTracks.length)
+                        : (pl.navidrome_matched_count ?? matchedTracks.length);
+                      const label = source === 'plex' ? 'Plex' : source === 'jellyfin' ? 'Jellyfin' : 'Navidrome';
+                      return (
+                        <>
+                          <div className="text-muted" style={{ fontSize: 11, marginBottom: '0.4rem' }}>
+                            {matchedCount} track{matchedCount !== 1 ? 's' : ''} downloaded in {label}
+                            {!hasPlex && source !== 'plex' && (
+                              <span style={{ marginLeft: 6 }}>(showing all playlist tracks — sync to see per-track match status)</span>
+                            )}
+                          </div>
+                          {matchedTracks.length > 0 ? (
+                            <table className="table" style={{ fontSize: 12 }}>
+                              <thead>
+                                <tr><th>Artist</th><th>Title</th><th>Album</th></tr>
+                              </thead>
+                              <tbody>
+                                {matchedTracks.map((t, i) => (
+                                  <tr key={i}>
+                                    <td className="text-muted">{t.artist && t.artist !== 'null' ? t.artist : '—'}</td>
+                                    <td>{t.title && t.title !== 'null' ? t.title : '—'}</td>
+                                    <td className="text-muted">{t.album && t.album !== 'null' ? t.album : <span style={{ opacity: 0.4, fontStyle: 'italic' }}>no album data</span>}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <div className="text-muted" style={{ fontSize: 12 }}>No matched tracks yet.</div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 {/* Expanded detail */}
                 {selected?.id === pl.id && (
