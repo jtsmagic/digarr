@@ -2856,6 +2856,94 @@ async def discover_similar_to_library():
 
 
 
+# ---------------------------------------------------------------------------
+# Lidarr webhook
+# ---------------------------------------------------------------------------
+
+async def _rematch_playlist_plex(playlist_id: int) -> None:
+    """Re-run Plex matching for a playlist using its existing tracks. Updates the
+    Plex playlist if more tracks are now matched than before."""
+    config = load_config()
+    if not config.get("plex_url") or not config.get("plex_token") or not config.get("plex_library_section_id"):
+        return
+    pl = get_playlist(playlist_id)
+    if not pl or not pl.get("plex_playlist_id"):
+        return
+    tracks = pl.get("tracks") or []
+    if isinstance(tracks, str):
+        import json as _j
+        tracks = _j.loads(tracks)
+    if not tracks:
+        return
+    try:
+        plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
+        matched_keys, unmatched, total = await plex_client.match_tracks(tracks)
+        current_matched = pl.get("plex_matched_count") or 0
+        if len(matched_keys) > current_matched:
+            logger.info("Lidarr webhook: playlist %d gained %d new Plex matches", playlist_id, len(matched_keys) - current_matched)
+            old_plex_id = pl.get("plex_playlist_id")
+            if old_plex_id:
+                try:
+                    await plex_client.delete_playlist(old_plex_id)
+                except Exception:
+                    pass
+            plex_name = _plex_playlist_name(pl["name"], config)
+            new_plex_id = await plex_client.create_playlist(plex_name, matched_keys)
+            update_playlist_plex_result(playlist_id, new_plex_id, len(matched_keys), total, unmatched, plex_playlist_name=plex_name)
+        else:
+            logger.info("Lidarr webhook: playlist %d no new matches (%d/%d)", playlist_id, current_matched, total)
+    except Exception as exc:
+        logger.error("Lidarr webhook rematch failed for playlist %d: %s", playlist_id, exc)
+
+
+@app.post("/api/webhooks/lidarr")
+async def lidarr_webhook(payload: dict):
+    """
+    Receive Lidarr import/upgrade events.
+    Finds playlists with the imported tracks in their unmatched list and re-runs Plex matching.
+    """
+    event = payload.get("eventType", "")
+    if event not in ("Download", "TrackRetag"):
+        return {"ok": True, "skipped": True}
+
+    # Extract imported track titles and artist name from payload
+    artist_name = (payload.get("artist") or {}).get("name", "").lower()
+    imported_titles = {
+        t.get("title", "").lower()
+        for t in (payload.get("tracks") or [])
+        if t.get("title")
+    }
+    if not artist_name and not imported_titles:
+        return {"ok": True, "skipped": True, "reason": "no artist/track info in payload"}
+
+    logger.info("Lidarr webhook: %s import for artist=%r tracks=%s", event, artist_name, imported_titles)
+
+    # Find playlists whose unmatched tracks overlap with the imported tracks
+    playlists = get_playlists()
+    to_rematch = []
+    for pl in playlists:
+        if not pl.get("plex_playlist_id"):
+            continue
+        unmatched = pl.get("plex_unmatched_tracks") or []
+        for t in unmatched:
+            t_artist = t.get("artist", "").lower()
+            t_title = t.get("title", "").lower()
+            artist_match = not artist_name or artist_name in t_artist or t_artist in artist_name
+            title_match = not imported_titles or t_title in imported_titles
+            if artist_match and title_match:
+                to_rematch.append(pl["id"])
+                break
+
+    if not to_rematch:
+        logger.info("Lidarr webhook: no matching playlists found")
+        return {"ok": True, "playlists_rematched": 0}
+
+    for pid in to_rematch:
+        asyncio.create_task(_rematch_playlist_plex(pid))
+
+    return {"ok": True, "playlists_rematched": len(to_rematch), "playlist_ids": to_rematch}
+
+
 if __name__ == "__main__":
     _port = int(os.environ.get("PORT", 8090))
     uvicorn.run("main:app", host="0.0.0.0", port=_port, reload=True)
