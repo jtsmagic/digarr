@@ -2564,6 +2564,37 @@ async def slskd_job_status(job_id: str):
     return job
 
 
+class SlskdAlbumRequest(BaseModel):
+    artist: str
+    title: str
+
+
+@app.post("/api/slskd/search-album")
+@limiter.limit("10/minute")
+async def slskd_search_album(req: SlskdAlbumRequest, request: Request):
+    """Fire-and-forget album download: resolve album via MB, find best directory on slskd, queue all files."""
+    config = load_config()
+    if not config.get("slskd_url") or not config.get("slskd_api_key"):
+        raise HTTPException(status_code=400, detail="slskd not configured.")
+    job_id = str(uuid.uuid4())
+    _slskd_jobs[job_id] = {"status": "searching"}
+
+    async def _run():
+        try:
+            sl = SlskdClient(
+                config["slskd_url"],
+                config["slskd_api_key"],
+                confidence_threshold=int(config.get("slskd_confidence_threshold") or 75),
+            )
+            result = await sl.search_and_queue_album(req.artist, req.title)
+            _slskd_jobs[job_id] = {"status": "done", **result}
+        except Exception as exc:
+            _slskd_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id, "status": "searching"}
+
+
 # ---------------------------------------------------------------------------
 # Library cache endpoints
 # ---------------------------------------------------------------------------
