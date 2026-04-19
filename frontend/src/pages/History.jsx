@@ -1178,8 +1178,17 @@ export default function History() {
                                                             onClick={async () => {
                                                               setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'queuing' }));
                                                               try {
-                                                                await axios.post('/api/slskd/search-queue', { tracks: [{ artist: t.artist, title: t.title }] });
-                                                                setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'queued' }));
+                                                                const { data } = await axios.post('/api/slskd/search-queue', { tracks: [{ artist: t.artist, title: t.title }] });
+                                                                const jobId = data.job_id;
+                                                                const poll = setInterval(async () => {
+                                                                  try {
+                                                                    const { data: job } = await axios.get(`/api/slskd/job/${jobId}`);
+                                                                    if (job.status === 'done' || job.status === 'error') {
+                                                                      clearInterval(poll);
+                                                                      setSlskdQueuing(prev => ({ ...prev, [matchKey]: job.status === 'done' ? 'queued' : 'error' }));
+                                                                    }
+                                                                  } catch { clearInterval(poll); setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'error' })); }
+                                                                }, 2000);
                                                               } catch {
                                                                 setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'error' }));
                                                               }
