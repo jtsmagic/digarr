@@ -1151,6 +1151,16 @@ if (loading) {
             </p>
           </div>
 
+          <div className="field">
+            <label>Apprise URL <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— optional</span></label>
+            <input value={config.apprise_url || ''}
+              onChange={e => handleChange('apprise_url', e.target.value)}
+              placeholder="http://apprise:8000" />
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              Base URL of an Apprise API server. A notification is sent after every playlist refresh (manual or scheduled).
+            </p>
+          </div>
+
           {config.webhook_url && (() => {
             const on = config.refresh_webhook_on_changes_only || false;
             return (

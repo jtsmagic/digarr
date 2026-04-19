@@ -41,6 +41,7 @@ DEFAULTS = {
     "playlist_export_path": "",
     "artist_blocklist": [],
     "webhook_url": "",
+    "apprise_url": "",
     "refresh_merge_tracks": False,
     "plex_sync_interval_hours": 0,
     "jellyfin_url": "",
