@@ -2527,23 +2527,41 @@ class SlskdSearchQueueRequest(BaseModel):
     tracks: list[dict]
 
 
+_slskd_jobs: dict[str, dict] = {}
+
+
 @app.post("/api/slskd/search-queue")
 @limiter.limit("10/minute")
 async def slskd_search_queue(req: SlskdSearchQueueRequest, request: Request):
-    """Search slskd for a list of {artist, title} tracks and queue the best matches."""
+    """Fire-and-forget: start slskd search in background, return job_id immediately."""
     config = load_config()
     if not config.get("slskd_url") or not config.get("slskd_api_key"):
         raise HTTPException(status_code=400, detail="slskd not configured.")
-    sl = SlskdClient(
-        config["slskd_url"],
-        config["slskd_api_key"],
-        confidence_threshold=int(config.get("slskd_confidence_threshold") or 85),
-    )
-    try:
-        result = await sl.queue_tracks(req.tracks)
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"slskd search failed: {exc}")
+    job_id = str(uuid.uuid4())
+    _slskd_jobs[job_id] = {"status": "searching"}
+
+    async def _run():
+        try:
+            sl = SlskdClient(
+                config["slskd_url"],
+                config["slskd_api_key"],
+                confidence_threshold=int(config.get("slskd_confidence_threshold") or 75),
+            )
+            result = await sl.queue_tracks(req.tracks)
+            _slskd_jobs[job_id] = {"status": "done", **result}
+        except Exception as exc:
+            _slskd_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id, "status": "searching"}
+
+
+@app.get("/api/slskd/job/{job_id}")
+async def slskd_job_status(job_id: str):
+    job = _slskd_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
 
 
 # ---------------------------------------------------------------------------
