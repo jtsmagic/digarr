@@ -390,7 +390,7 @@ export default function Import() {
             { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
             { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
             { id: 'deemix', label: 'Deemix', show: deemixConfigured },
-            { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
+            { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
           ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={syncTargets.has(id)}
@@ -817,7 +817,7 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
                     { id: 'deemix', label: 'Deemix', show: deemixConfigured },
-                    { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
+                    { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}
@@ -1020,7 +1020,7 @@ function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigur
                     { id: 'plex', label: 'Plex', show: plexConfigured },
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
-                    { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
+                    { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}
