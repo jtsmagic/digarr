@@ -385,14 +385,15 @@ export default function Import() {
       )}
 
       {/* Sync targets */}
-      {inputType !== 'spotify' && inputType !== 'deemix' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 1 && (
+      {inputType !== 'spotify' && inputType !== 'deemix' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured].some(Boolean) && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync playlist to:</span>
           {[
             { id: 'plex', label: 'Plex', show: plexConfigured },
             { id: 'spotify', label: 'Spotify', show: spotifyConfigured },
             { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
             { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+            { id: 'deemix', label: 'Deemix', show: deemixConfigured },
           ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={syncTargets.has(id)}
@@ -408,11 +409,10 @@ export default function Import() {
         </div>
       )}
       {/* Download via — only shown when Lidarr is configured */}
-      {inputType !== 'spotify' && inputType !== 'deemix' && lidarrConfigured && [deemixConfigured, slskdConfigured].some(Boolean) && (
+      {inputType !== 'spotify' && inputType !== 'deemix' && lidarrConfigured && slskdConfigured && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Download via:</span>
           {[
-            { id: 'deemix', label: 'Deemix', show: deemixConfigured },
             { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
           ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
@@ -853,11 +853,10 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
                   ))}
                 </div>
               )}
-              {lidarrConfigured && [deemixConfigured, slskdConfigured].some(Boolean) && (
+              {lidarrConfigured && slskdConfigured && (
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Download via:</span>
                   {[
-                    { id: 'deemix', label: 'Deemix', show: deemixConfigured },
                     { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
