@@ -2501,6 +2501,29 @@ async def slskd_manual_queue(req: SlskdManualQueueRequest, request: Request):
     return {"ok": True}
 
 
+class SlskdSearchQueueRequest(BaseModel):
+    tracks: list[dict]
+
+
+@app.post("/api/slskd/search-queue")
+@limiter.limit("10/minute")
+async def slskd_search_queue(req: SlskdSearchQueueRequest, request: Request):
+    """Search slskd for a list of {artist, title} tracks and queue the best matches."""
+    config = load_config()
+    if not config.get("slskd_url") or not config.get("slskd_api_key"):
+        raise HTTPException(status_code=400, detail="slskd not configured.")
+    sl = SlskdClient(
+        config["slskd_url"],
+        config["slskd_api_key"],
+        confidence_threshold=int(config.get("slskd_confidence_threshold") or 85),
+    )
+    try:
+        result = await sl.queue_tracks(req.tracks)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"slskd search failed: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Library cache endpoints
 # ---------------------------------------------------------------------------
