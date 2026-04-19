@@ -33,6 +33,7 @@ export default function Import() {
   const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [deemixConfigured, setDeemixConfigured] = useState(false);
   const [slskdConfigured, setSlskdConfigured] = useState(false);
+  const [lidarrConfigured, setLidarrConfigured] = useState(false);
   const [syncTargets, setSyncTargets] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('syncTargets')) || ['plex', 'spotify']); }
     catch { return new Set(['plex', 'spotify']); }
@@ -52,6 +53,7 @@ export default function Import() {
     axios.get('/api/config').then(r => {
       const d = r.data;
       setPlexConfigured(!!(d.plex_url && d.plex_token));
+      setLidarrConfigured(!!(d.lidarr_url && d.lidarr_api_key));
       const missing = [];
       const provider = d.active_ai_provider || 'claude';
       const hasAI = provider === 'openai' ? !!d.openai_api_key : !!d.anthropic_api_key;
@@ -342,6 +344,7 @@ export default function Import() {
           navidromeConfigured={navidromeConfigured}
           deemixConfigured={deemixConfigured}
           slskdConfigured={slskdConfigured}
+          lidarrConfigured={lidarrConfigured}
           onQueued={setQueuedJob}
         />
       ) : inputType === 'deemix' ? (
@@ -350,6 +353,7 @@ export default function Import() {
           jellyfinConfigured={jellyfinConfigured}
           navidromeConfigured={navidromeConfigured}
           slskdConfigured={slskdConfigured}
+          lidarrConfigured={lidarrConfigured}
           onQueued={setQueuedJob}
         />
       ) : (
@@ -380,8 +384,8 @@ export default function Import() {
         </div>
       )}
 
-      {/* Sync targets — only shown when 2+ are configured, not needed for Spotify/Deemix tabs (handled internally) */}
-      {inputType !== 'spotify' && inputType !== 'deemix' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 2 && (
+      {/* Sync targets */}
+      {inputType !== 'spotify' && inputType !== 'deemix' && [plexConfigured, spotifyConfigured, jellyfinConfigured, navidromeConfigured].filter(Boolean).length >= 1 && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
           {[
@@ -389,8 +393,27 @@ export default function Import() {
             { id: 'spotify', label: 'Spotify', show: spotifyConfigured },
             { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
             { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+          ].filter(t => t.show).map(({ id, label }) => (
+            <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={syncTargets.has(id)}
+                onChange={e => setSyncTargets(prev => {
+                  const s = new Set(prev);
+                  e.target.checked ? s.add(id) : s.delete(id);
+                  localStorage.setItem('syncTargets', JSON.stringify([...s]));
+                  return s;
+                })} />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
+      {/* Download via — only shown when Lidarr is configured */}
+      {inputType !== 'spotify' && inputType !== 'deemix' && lidarrConfigured && [deemixConfigured, slskdConfigured].some(Boolean) && (
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Download via:</span>
+          {[
             { id: 'deemix', label: 'Deemix', show: deemixConfigured },
-            { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
+            { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
           ].filter(t => t.show).map(({ id, label }) => (
             <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={syncTargets.has(id)}
@@ -599,7 +622,7 @@ export default function Import() {
 // Spotify import tab
 // ---------------------------------------------------------------------------
 
-function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured, onQueued }) {
+function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured, lidarrConfigured, onQueued }) {
   const [playlists, setPlaylists]         = useState(null);
   const [listsLoading, setListsLoading]   = useState(false);
   const [selectedPlaylist, setSelectedPlaylist] = useState('');
@@ -809,15 +832,33 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
                 <span style={{ fontSize: 13 }}>Add to scheduled refresh</span>
               </div>
 
-              {[plexConfigured, jellyfinConfigured, navidromeConfigured, deemixConfigured, slskdConfigured].filter(Boolean).length >= 1 && (
-                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              {[plexConfigured, jellyfinConfigured, navidromeConfigured].some(Boolean) && (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
                   {[
                     { id: 'plex', label: 'Plex', show: plexConfigured },
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
+                  ].filter(t => t.show).map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={syncTargets.has(id)}
+                        onChange={e => setSyncTargets(prev => {
+                          const s = new Set(prev);
+                          e.target.checked ? s.add(id) : s.delete(id);
+                          localStorage.setItem('syncTargets', JSON.stringify([...s]));
+                          return s;
+                        })} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {lidarrConfigured && [deemixConfigured, slskdConfigured].some(Boolean) && (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Download via:</span>
+                  {[
                     { id: 'deemix', label: 'Deemix', show: deemixConfigured },
-                    { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
+                    { id: 'slskd', label: 'Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}
@@ -848,7 +889,7 @@ function SpotifyImportTab({ spotifyConfigured, plexConfigured, jellyfinConfigure
 // Deemix / Deezer import tab
 // ---------------------------------------------------------------------------
 
-function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigured, slskdConfigured, onQueued }) {
+function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigured, slskdConfigured, lidarrConfigured, onQueued }) {
   const [playlists, setPlaylists] = useState(null);
   const [listsLoading, setListsLoading] = useState(false);
   const [selectedPlaylist, setSelectedPlaylist] = useState('');
@@ -1013,14 +1054,13 @@ function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigur
                 <span style={{ fontSize: 13 }}>Add to scheduled refresh</span>
               </div>
 
-              {[plexConfigured, jellyfinConfigured, navidromeConfigured, slskdConfigured].filter(Boolean).length >= 1 && (
-                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              {[plexConfigured, jellyfinConfigured, navidromeConfigured].some(Boolean) && (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Sync to:</span>
                   {[
                     { id: 'plex', label: 'Plex', show: plexConfigured },
                     { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
                     { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
-                    { id: 'slskd', label: 'Queue to Soulseek', show: slskdConfigured },
                   ].filter(t => t.show).map(({ id, label }) => (
                     <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
                       <input type="checkbox" checked={syncTargets.has(id)}
@@ -1033,6 +1073,21 @@ function DeemixImportTab({ plexConfigured, jellyfinConfigured, navidromeConfigur
                       {label}
                     </label>
                   ))}
+                </div>
+              )}
+              {lidarrConfigured && slskdConfigured && (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>Download via:</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 13, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={syncTargets.has('slskd')}
+                      onChange={e => setSyncTargets(prev => {
+                        const s = new Set(prev);
+                        e.target.checked ? s.add('slskd') : s.delete('slskd');
+                        localStorage.setItem('syncTargets', JSON.stringify([...s]));
+                        return s;
+                      })} />
+                    Soulseek
+                  </label>
                 </div>
               )}
 
