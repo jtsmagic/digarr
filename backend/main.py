@@ -956,7 +956,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
             db_increment_stat("spotify_tracks_matched_total", job["spotify_result"].get("matched", 0))
         if job.get("deemix_result"):
             db_increment_stat("deemix_tracks_queued_total", job["deemix_result"].get("queued", 0))
-if config.get("playlist_export_path"):
+        if config.get("playlist_export_path"):
             export_playlist_to_path(job["playlist_name"], req.tracks, config["playlist_export_path"])
     except Exception as exc:
         job["error"] = f"Failed to update playlist: {exc}"
