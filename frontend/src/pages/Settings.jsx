@@ -16,8 +16,6 @@ export default function Settings() {
   const [error, setError] = useState(null);
   const [profiles, setProfiles] = useState(null);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
-  const [triggeringImport, setTriggeringImport] = useState(false);
-  const [importResult, setImportResult] = useState(null);
   const [plexSections, setPlexSections] = useState(null);
   const [loadingPlexSections, setLoadingPlexSections] = useState(false);
   const [spotifyStatus, setSpotifyStatus] = useState(null);
@@ -31,8 +29,6 @@ export default function Settings() {
   const navidromeCachePollerRef = useRef(null);
   const [deemixStatus, setDeemixStatus] = useState(null);
   const [deemixTesting, setDeemixTesting] = useState(false);
-  const [slskdStatus, setSlskdStatus] = useState(null);
-  const [slskdTesting, setSlskdTesting] = useState(false);
   const [spotifyDisconnecting, setSpotifyDisconnecting] = useState(false);
   const [openSections, setOpenSections] = useState(() => new Set(['general']));
   // Seed from localStorage so the button shows the right state on first paint,
@@ -296,20 +292,7 @@ export default function Settings() {
     }
   };
 
-  const handleTestSlskd = async () => {
-    setSlskdTesting(true);
-    setSlskdStatus(null);
-    try {
-      const res = await axios.get('/api/slskd/status');
-      setSlskdStatus(res.data);
-    } catch (e) {
-      setSlskdStatus({ error: e.response?.data?.detail || 'Connection failed.' });
-    } finally {
-      setSlskdTesting(false);
-    }
-  };
-
-  if (loading) {
+if (loading) {
     return (
       <div>
         <h1 className="page-title">Settings</h1>
@@ -574,31 +557,6 @@ export default function Settings() {
             </div>
             <span className="text-muted" style={{ fontSize: 11 }}>
               Add in Lidarr → Settings → Connect → Webhook. Triggers: On Import, On Upgrade.
-            </span>
-          </div>
-          <div className="field" style={{ marginBottom: '1rem' }}>
-            <label>Soulseek Download Folder <span className="text-muted" style={{ fontWeight: 400 }}>(Lidarr's internal path)</span></label>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <input value={config.slskd_lidarr_import_folder || ''}
-                onChange={e => handleChange('slskd_lidarr_import_folder', e.target.value)}
-                placeholder="/import" style={{ fontFamily: 'monospace', fontSize: 12 }} />
-              <button className="btn btn-ghost" style={{ flexShrink: 0, fontSize: 12 }}
-                disabled={triggeringImport || !config.slskd_lidarr_import_folder}
-                onClick={async () => {
-                  setTriggeringImport(true); setImportResult(null);
-                  try {
-                    const { data } = await axios.post('/api/lidarr/trigger-import');
-                    setImportResult(data.imported > 0 ? `✓ Imported ${data.imported} file(s)` : 'No new files to import');
-                  } catch (e) {
-                    setImportResult(`Error: ${e.response?.data?.detail || e.message}`);
-                  } finally { setTriggeringImport(false); }
-                }}>
-                {triggeringImport ? <><span className="spinner" /> Scanning…</> : '↓ Trigger Import Now'}
-              </button>
-            </div>
-            <span className="text-muted" style={{ fontSize: 11 }}>
-              Path Lidarr uses for slskd downloads (e.g. <code>/import</code>). Digarr scans this every 10 minutes automatically.
-              {importResult && <span style={{ marginLeft: 8, color: importResult.startsWith('✓') ? 'var(--green)' : 'var(--red)' }}>{importResult}</span>}
             </span>
           </div>
           <div className="grid-3">
@@ -1135,53 +1093,7 @@ export default function Settings() {
         </>}
       </div>
 
-      {/* slskd / Soulseek */}
-      <div className="card">
-        <SectionTitle sectionKey="slskd">Soulseek (slskd)</SectionTitle>
-        {openSections.has('slskd') && <>
-          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Connect a self-hosted <a href="https://github.com/slskd/slskd" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>slskd</a> instance
-            to automatically search and download tracks via the Soulseek P2P network. Candidates are scored against
-            MusicBrainz metadata; high-confidence matches are auto-queued and low-confidence tracks are flagged for
-            manual review in the History detail panel.
-          </p>
-          <div className="field">
-            <label>slskd URL</label>
-            <input value={config.slskd_url || ''} onChange={e => handleChange('slskd_url', e.target.value)}
-              placeholder="http://192.168.1.x:5030" />
-          </div>
-          <div className="field">
-            <label>slskd API Key</label>
-            <input type="password" value={config.slskd_api_key || ''} onChange={e => handleChange('slskd_api_key', e.target.value)}
-              placeholder="your slskd API key" />
-            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
-              Found in slskd → Settings → API Keys.
-            </p>
-          </div>
-          <div className="field">
-            <label>Confidence Threshold — {config.slskd_confidence_threshold ?? 85}%</label>
-            <input type="range" min={50} max={99} step={1}
-              value={config.slskd_confidence_threshold ?? 85}
-              onChange={e => handleChange('slskd_confidence_threshold', parseInt(e.target.value))}
-              style={{ width: '100%' }} />
-            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
-              Matches scoring at or above this threshold are auto-queued. Below-threshold tracks are flagged for review.
-            </p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
-            <button className="btn btn-ghost" onClick={handleTestSlskd} disabled={slskdTesting}>
-              {slskdTesting ? <><span className="spinner" /> Testing...</> : 'Test Connection'}
-            </button>
-            {slskdStatus && (() => {
-              if (!slskdStatus.configured) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter URL and API key, then save before testing.</span>;
-              if (slskdStatus.error) return <span style={{ fontSize: 12, color: 'var(--red)' }}>✗ {slskdStatus.error}</span>;
-              return <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ Connected{slskdStatus.version ? ` — v${slskdStatus.version}` : ''}</span>;
-            })()}
-          </div>
-        </>}
-      </div>
-
-      {/* Local Export */}
+{/* Local Export */}
       <div className="card">
         <SectionTitle sectionKey="export">Local Playlist Export</SectionTitle>
         {openSections.has('export') && <>

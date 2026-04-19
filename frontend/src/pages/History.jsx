@@ -19,8 +19,6 @@ export default function History() {
   const [navidromeSyncStates, setNavidromeSyncStates] = useState({});
   const [spotifyPushStates, setSpotifyPushStates] = useState({});  // { [id]: { loading, result, error } }
   const [spotifyConnected, setSpotifyConnected] = useState(false);
-  const [deemixPushStates, setDeemixPushStates] = useState({});
-  const [deemixConfigured, setDeemixConfigured] = useState(false);
   const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
   const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [refreshStates, setRefreshStates] = useState({});  // { [id]: { loading, result, error } }
@@ -48,7 +46,6 @@ export default function History() {
   const [wantedData, setWantedData] = useState(null);
   const [wantedLoading, setWantedLoading] = useState(false);
   const [lidarrConfigured, setLidarrConfigured] = useState(false);
-  const [slskdConfigured, setSlskdConfigured] = useState(false);
   const [importJobs, setImportJobs] = useState([]);
   const completedJobIds = useRef(new Set());
   const dismissedJobIds = useRef(new Set());
@@ -61,8 +58,6 @@ export default function History() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchSaved, setSearchSaved] = useState(null); // track key that was just saved
   const [manualMatches, setManualMatches] = useState({}); // { "artist||title" → matched track }
-  const [slskdQueuing, setSlskdQueuing] = useState({}); // { "artist||title" → "queuing"|"queued"|"error" }
-  const [slskdAlbumQueuing, setSlskdAlbumQueuing] = useState({}); // { "artist||title" → "queuing"|"queued"|"error"|{album,count} }
   const [ignoredTracks, setIgnoredTracks] = useState(new Set()); // Set of "artist_lower||title_lower"
   const [expandedIgnored, setExpandedIgnored] = useState({}); // { playlistId → bool }
 
@@ -76,10 +71,9 @@ export default function History() {
 
   useEffect(() => {
     axios.get('/api/spotify/status').then(r => setSpotifyConnected(r.data.connected)).catch(() => {});
-    axios.get('/api/deemix/status').then(r => setDeemixConfigured(r.data.configured)).catch(() => {});
+
     axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
-    axios.get('/api/slskd/status').then(r => setSlskdConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
@@ -224,17 +218,7 @@ export default function History() {
     }
   };
 
-  const handlePushToDeemix = async (pl) => {
-    setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
-    try {
-      const res = await axios.post(`/api/deemix/push/${pl.id}`);
-      setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
-    } catch (err) {
-      setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Deemix push failed.' } }));
-    }
-  };
-
-  const handlePushToSpotify = async (pl) => {
+const handlePushToSpotify = async (pl) => {
     setSpotifyPushStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
     try {
       const res = await axios.post(`/api/spotify/push/${pl.id}`);
@@ -708,7 +692,6 @@ export default function History() {
             const navidromeSync = navidromeSyncStates[pl.id] || {};
             const refresh = refreshStates[pl.id] || {};
             const spotifyPush = spotifyPushStates[pl.id] || {};
-            const deemixPush = deemixPushStates[pl.id] || {};
             const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'spotify'].includes(pl.source_type);
             const activeJob = importJobs.find(j => j.playlist_id === pl.id && (j.status === 'queued' || j.status === 'running'));
             return (
@@ -881,16 +864,7 @@ export default function History() {
                         )}
                         {spotifyPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{spotifyPush.error}</span>}
 
-                        {/* Deemix push state */}
-                        {deemixPush.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Pushing to Deemix…</span>}
-                        {deemixPush.result && (
-                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
-                            Deemix: {deemixPush.result.queued}/{deemixPush.result.total} queued
-                          </span>
-                        )}
-                        {deemixPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{deemixPush.error}</span>}
-
-                        {/* Jellyfin — primary button only when already synced */}
+{/* Jellyfin — primary button only when already synced */}
                         {jellyfinConfigured && pl.jellyfin_playlist_id && (
                           <button className="btn btn-ghost" style={{ fontSize: 10, color: '#00a4dc', borderColor: '#00a4dc' }}
                             disabled={jellyfinSync.loading} onClick={e => handleSyncJellyfin(e, pl)}>
@@ -953,18 +927,6 @@ export default function History() {
                                     onMouseLeave={e => e.currentTarget.style.background = 'none'}
                                     onClick={() => { setMenuOpenId(null); handlePushToSpotify(pl); }}>
                                     {pl.spotify_playlist_id ? '⟳ Sync to Spotify' : '▶ Push to Spotify'}
-                                  </button>
-                                </>
-                              )}
-                              {deemixConfigured && (
-                                <>
-                                  <div style={{ height: 1, background: 'var(--border)', margin: '0 8px' }} />
-                                  <button
-                                    style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', padding: '8px 14px', fontSize: 12, cursor: 'pointer' }}
-                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
-                                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                                    onClick={() => { setMenuOpenId(null); handlePushToDeemix(pl); }}>
-                                    ▶ Push to Deemix
                                   </button>
                                 </>
                               )}
@@ -1166,77 +1128,6 @@ export default function History() {
                                                       >
                                                         Search library
                                                       </button>
-                                                      {slskdConfigured && (() => {
-                                                        const qState = slskdQueuing[matchKey];
-                                                        if (qState === 'queued') return (
-                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ queued</span>
-                                                        );
-                                                        return (
-                                                          <button
-                                                            className="btn btn-ghost"
-                                                            style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                                                            disabled={qState === 'queuing'}
-                                                            onClick={async () => {
-                                                              setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'queuing' }));
-                                                              try {
-                                                                const { data } = await axios.post('/api/slskd/search-queue', { tracks: [{ artist: t.artist, title: t.title }] });
-                                                                const jobId = data.job_id;
-                                                                const poll = setInterval(async () => {
-                                                                  try {
-                                                                    const { data: job } = await axios.get(`/api/slskd/job/${jobId}`);
-                                                                    if (job.status === 'done' || job.status === 'error') {
-                                                                      clearInterval(poll);
-                                                                      setSlskdQueuing(prev => ({ ...prev, [matchKey]: job.status === 'done' ? 'queued' : 'error' }));
-                                                                    }
-                                                                  } catch { clearInterval(poll); setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'error' })); }
-                                                                }, 2000);
-                                                              } catch {
-                                                                setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'error' }));
-                                                              }
-                                                            }}
-                                                          >
-                                                            {qState === 'queuing' ? '…' : 'Soulseek'}
-                                                          </button>
-                                                        );
-                                                      })()}
-                                                      {slskdConfigured && (() => {
-                                                        const aState = slskdAlbumQueuing[matchKey];
-                                                        if (aState && typeof aState === 'object') return (
-                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ {aState.count} files ({aState.album})</span>
-                                                        );
-                                                        if (aState === 'queued') return (
-                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ album queued</span>
-                                                        );
-                                                        return (
-                                                          <button className="btn btn-ghost"
-                                                            style={{ fontSize: 9, padding: '3px 8px', color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                                                            disabled={aState === 'queuing'}
-                                                            onClick={async () => {
-                                                              setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'queuing' }));
-                                                              try {
-                                                                const { data } = await axios.post('/api/slskd/search-album', { artist: t.artist, title: t.title });
-                                                                const jobId = data.job_id;
-                                                                const poll = setInterval(async () => {
-                                                                  try {
-                                                                    const { data: job } = await axios.get(`/api/slskd/job/${jobId}`);
-                                                                    if (job.status === 'done' || job.status === 'error') {
-                                                                      clearInterval(poll);
-                                                                      if (job.status === 'done' && job.queued_count > 0) {
-                                                                        setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: { album: job.album, count: job.queued_count } }));
-                                                                      } else {
-                                                                        setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: job.status === 'done' ? 'queued' : 'error' }));
-                                                                      }
-                                                                    }
-                                                                  } catch { clearInterval(poll); setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'error' })); }
-                                                                }, 2000);
-                                                              } catch {
-                                                                setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'error' }));
-                                                              }
-                                                            }}>
-                                                            {aState === 'queuing' ? '…' : 'Album'}
-                                                          </button>
-                                                        );
-                                                      })()}
                                                       <button
                                                         className="btn btn-ghost"
                                                         style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1, borderColor: 'var(--border)', color: 'var(--text-muted)' }}
@@ -1280,66 +1171,6 @@ export default function History() {
                           ) : matchedCount != null ? (
                             <div className="text-muted" style={{ fontSize: 12 }}>All tracks matched ✓</div>
                           ) : null}
-                        </div>
-                      );
-                    })()}
-                    {/* Soulseek flagged tracks — manual review */}
-                    {pl.slskd_flagged_count > 0 && (() => {
-                      const flaggedKey = `slskd_${pl.id}`;
-                      const flagged = window._slskdFlaggedCache?.[pl.id];
-                      if (!flagged) {
-                        axios.get(`/api/playlists/${pl.id}/slskd-flagged`).then(r => {
-                          if (!window._slskdFlaggedCache) window._slskdFlaggedCache = {};
-                          window._slskdFlaggedCache[pl.id] = r.data.flagged;
-                          // Force re-render
-                          setPlaylists(prev => [...prev]);
-                        }).catch(() => {});
-                        return null;
-                      }
-                      if (!flagged.length) return null;
-                      return (
-                        <div>
-                          <div className="card-title" style={{ marginBottom: '0.5rem' }}>
-                            Soulseek — Flagged Tracks
-                            <span className="text-muted" style={{ fontWeight: 400, marginLeft: 8 }}>
-                              {pl.slskd_queued_count} queued · {pl.slskd_flagged_count} need review
-                            </span>
-                          </div>
-                          <p className="text-muted" style={{ fontSize: 11, marginBottom: '0.5rem' }}>
-                            These tracks scored below your confidence threshold. Pick the best match to queue, or skip.
-                          </p>
-                          {flagged.map((track, ti) => (
-                            <div key={ti} style={{ marginBottom: '0.75rem', padding: '0.5rem', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: '0.35rem' }}>
-                                {track.artist} — {track.title}
-                                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
-                                  best score: {track.score?.toFixed(0)}%
-                                </span>
-                              </div>
-                              {(track.candidates || []).slice(0, 3).map((c, ci) => (
-                                <div key={ci} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 11, marginBottom: '0.2rem' }}>
-                                  <span style={{ color: 'var(--text-muted)', minWidth: 36 }}>{c.score?.toFixed(0)}%</span>
-                                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-                                    {c.filename?.split(/[\\/]/).pop()}
-                                  </span>
-                                  <span className="text-muted" style={{ fontSize: 10 }}>{c.username}</span>
-                                  <button className="btn btn-ghost" style={{ fontSize: 9, padding: '2px 6px', flexShrink: 0 }}
-                                    onClick={() => {
-                                      axios.post('/api/slskd/queue', {
-                                        artist: track.artist, title: track.title,
-                                        username: c.username, filename: c.filename, size: c.size || 0,
-                                      }).then(() => {
-                                        if (!window._slskdFlaggedCache) window._slskdFlaggedCache = {};
-                                        window._slskdFlaggedCache[pl.id] = (window._slskdFlaggedCache[pl.id] || []).filter((_, i) => i !== ti);
-                                        setPlaylists(prev => [...prev]);
-                                      }).catch(e => alert(e.response?.data?.detail || 'Queue failed'));
-                                    }}>
-                                    Queue
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          ))}
                         </div>
                       );
                     })()}
