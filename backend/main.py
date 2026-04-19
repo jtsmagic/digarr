@@ -164,6 +164,18 @@ async def _send_webhook(url: str, payload: dict) -> None:
         logger.warning("Webhook delivery failed: %s", exc)
 
 
+async def _send_apprise(base_url: str, title: str, body: str, notify_type: str = "info") -> None:
+    """POST a notification to an Apprise API server. Best-effort — never raises."""
+    if not base_url:
+        return
+    url = base_url.rstrip("/") + "/notify"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, json={"title": title, "body": body, "type": notify_type})
+    except Exception as exc:
+        logger.warning("Apprise notification failed: %s", exc)
+
+
 def make_lidarr_client(config: dict) -> LidarrClient:
     return LidarrClient(
         config["lidarr_url"],
@@ -1794,6 +1806,17 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
                 navidrome_sync_result = {"matched": len(matched_ids), "total": total}
         except Exception as e:
             logger.error("Auto Navidrome sync failed for playlist %s: %s", playlist_id, e)
+
+    apprise_url = config.get("apprise_url", "")
+    if apprise_url:
+        n = len(net_new_names)
+        if n:
+            body = f"{n} new artist{'s' if n != 1 else ''} added: {', '.join(net_new_names[:5])}" + (" …" if n > 5 else "")
+            notify_type = "success"
+        else:
+            body = "No new artists found."
+            notify_type = "info"
+        await _send_apprise(apprise_url, f"Diggarr: {pl['name']} refreshed", body, notify_type)
 
     return {
         "new_artists": net_new_names,
