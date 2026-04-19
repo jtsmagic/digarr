@@ -560,6 +560,20 @@ export default function Settings() {
               {loadingProfiles ? <><span className="spinner" /> Connecting...</> : '⟳ Load Profiles from Lidarr'}
             </button>
           </div>
+          <div className="field" style={{ marginBottom: '1rem' }}>
+            <label>Import Webhook URL</label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input readOnly value={`${window.location.origin}/api/webhooks/lidarr`}
+                style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)', cursor: 'text' }} />
+              <button className="btn btn-ghost" style={{ flexShrink: 0, fontSize: 12 }}
+                onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/lidarr`)}>
+                Copy
+              </button>
+            </div>
+            <span className="text-muted" style={{ fontSize: 11 }}>
+              Add in Lidarr → Settings → Connect → Webhook. Triggers: On Import, On Upgrade.
+            </span>
+          </div>
           <div className="grid-3">
             <div className="field">
               <label>Quality Profile</label>
