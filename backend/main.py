@@ -2408,6 +2408,28 @@ async def deemix_status():
         return {"configured": True, "error": str(e)}
 
 
+@app.post("/api/deemix/push/{playlist_id}")
+async def deemix_push_playlist(playlist_id: int):
+    config = load_config()
+    if not config.get("deemix_url"):
+        raise HTTPException(status_code=400, detail="Deemix not configured.")
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    tracks = pl.get("tracks") or []
+    if isinstance(tracks, str):
+        import json
+        tracks = json.loads(tracks)
+    if not tracks:
+        raise HTTPException(status_code=400, detail="Playlist has no tracks.")
+    dx = DeemixClient(config["deemix_url"], config.get("deemix_arl", ""))
+    try:
+        result = await dx.queue_tracks(tracks)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Deemix error: {exc}")
+    return {"queued": result["queued"], "failed": result["failed"], "total": len(tracks)}
+
+
 @app.get("/api/deemix/playlists")
 async def deemix_playlists():
     config = load_config()

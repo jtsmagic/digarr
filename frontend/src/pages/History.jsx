@@ -19,6 +19,8 @@ export default function History() {
   const [navidromeSyncStates, setNavidromeSyncStates] = useState({});
   const [spotifyPushStates, setSpotifyPushStates] = useState({});  // { [id]: { loading, result, error } }
   const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [deemixPushStates, setDeemixPushStates] = useState({});
+  const [deemixConfigured, setDeemixConfigured] = useState(false);
   const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
   const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [refreshStates, setRefreshStates] = useState({});  // { [id]: { loading, result, error } }
@@ -73,6 +75,7 @@ export default function History() {
 
   useEffect(() => {
     axios.get('/api/spotify/status').then(r => setSpotifyConnected(r.data.connected)).catch(() => {});
+    axios.get('/api/deemix/status').then(r => setDeemixConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/slskd/status').then(r => setSlskdConfigured(r.data.configured)).catch(() => {});
@@ -217,6 +220,16 @@ export default function History() {
       setTimeout(closeSearchModal, 800);
     } catch {
       // ignore — modal stays open so user can retry
+    }
+  };
+
+  const handlePushToDeemix = async (pl) => {
+    setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
+    try {
+      const res = await axios.post(`/api/deemix/push/${pl.id}`);
+      setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
+    } catch (err) {
+      setDeemixPushStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Deemix push failed.' } }));
     }
   };
 
@@ -694,6 +707,7 @@ export default function History() {
             const navidromeSync = navidromeSyncStates[pl.id] || {};
             const refresh = refreshStates[pl.id] || {};
             const spotifyPush = spotifyPushStates[pl.id] || {};
+            const deemixPush = deemixPushStates[pl.id] || {};
             const canRefresh = pl.source_url && ['url', 'm3u_url', 'listenbrainz', 'similar', 'spotify'].includes(pl.source_type);
             const activeJob = importJobs.find(j => j.playlist_id === pl.id && (j.status === 'queued' || j.status === 'running'));
             return (
@@ -866,6 +880,15 @@ export default function History() {
                         )}
                         {spotifyPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{spotifyPush.error}</span>}
 
+                        {/* Deemix push state */}
+                        {deemixPush.loading && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Pushing to Deemix…</span>}
+                        {deemixPush.result && (
+                          <span style={{ fontSize: 11, color: 'var(--green)' }}>
+                            Deemix: {deemixPush.result.queued}/{deemixPush.result.total} queued
+                          </span>
+                        )}
+                        {deemixPush.error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{deemixPush.error}</span>}
+
                         {/* Jellyfin — primary button only when already synced */}
                         {jellyfinConfigured && pl.jellyfin_playlist_id && (
                           <button className="btn btn-ghost" style={{ fontSize: 10, color: '#00a4dc', borderColor: '#00a4dc' }}
@@ -929,6 +952,18 @@ export default function History() {
                                     onMouseLeave={e => e.currentTarget.style.background = 'none'}
                                     onClick={() => { setMenuOpenId(null); handlePushToSpotify(pl); }}>
                                     {pl.spotify_playlist_id ? '⟳ Sync to Spotify' : '▶ Push to Spotify'}
+                                  </button>
+                                </>
+                              )}
+                              {deemixConfigured && (
+                                <>
+                                  <div style={{ height: 1, background: 'var(--border)', margin: '0 8px' }} />
+                                  <button
+                                    style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', padding: '8px 14px', fontSize: 12, cursor: 'pointer' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                                    onClick={() => { setMenuOpenId(null); handlePushToDeemix(pl); }}>
+                                    ▶ Push to Deemix
                                   </button>
                                 </>
                               )}
