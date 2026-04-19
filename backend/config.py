@@ -62,10 +62,6 @@ DEFAULTS = {
     "oidc_redirect_uri": "",
     "deemix_url": "",
     "deemix_arl": "",
-    "slskd_url": "",
-    "slskd_api_key": "",
-    "slskd_confidence_threshold": 75,
-    "slskd_lidarr_import_folder": "",
 }
 
 # Environment variable overrides for sensitive keys.

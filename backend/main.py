@@ -67,7 +67,6 @@ from navidrome import NavidromeClient
 from media_client import PlexMediaClient, JellyfinMediaClient, NavidromeMediaClient
 from download_client import LidarrDownloadClient
 from deemix import DeemixClient
-from slskd import SlskdClient
 from ai.claude import ClaudeProvider
 from ai.openai import OpenAIProvider
 
@@ -103,7 +102,7 @@ from config import load_config, save_config
 from database import (
     db_prune_expired_sessions, save_oauth_state, consume_oauth_state,
     db_save_import_job, db_load_recent_import_jobs, db_prune_import_jobs,
-    update_playlist_deemix_result, update_playlist_slskd_result,
+    update_playlist_deemix_result,
     db_increment_stat, db_set_stat_text, db_set_stat_text_if_unset, db_get_all_stats,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -244,7 +243,6 @@ async def startup():
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
     _reschedule_jellyfin_sync(int(config.get("jellyfin_sync_interval_hours") or 0))
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
-    _reschedule_lidarr_import(bool(config.get("slskd_lidarr_import_folder", "").strip()))
     scheduler.start()
 
 @app.on_event("shutdown")
@@ -530,7 +528,6 @@ def update_config(config: dict):
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
     _reschedule_jellyfin_sync(int(config.get("jellyfin_sync_interval_hours") or 0))
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
-    _reschedule_lidarr_import(bool(config.get("slskd_lidarr_import_folder")))
     return {"status": "ok"}
 
 def _reschedule(hours: int):
@@ -563,24 +560,6 @@ def _reschedule_navidrome_sync(hours: int):
     if hours > 0:
         scheduler.add_job(_navidrome_sync_all_job, IntervalTrigger(hours=hours), id="navidrome_sync_all", replace_existing=True)
 
-async def _lidarr_import_job():
-    config = load_config()
-    folder = config.get("slskd_lidarr_import_folder", "").strip()
-    if not folder or not config.get("lidarr_url") or not config.get("lidarr_api_key"):
-        return
-    try:
-        lc = make_lidarr_client(config)
-        result = await lc.trigger_manual_import(folder)
-        if result.get("imported", 0) > 0:
-            logger.info("Lidarr auto-import: imported %d files from %s", result["imported"], folder)
-    except Exception as exc:
-        logger.warning("Lidarr auto-import job failed: %s", exc)
-
-def _reschedule_lidarr_import(enabled: bool):
-    if scheduler.get_job("lidarr_import"):
-        scheduler.remove_job("lidarr_import")
-    if enabled:
-        scheduler.add_job(_lidarr_import_job, IntervalTrigger(minutes=10), id="lidarr_import", replace_existing=True)
 
 async def _refresh_all_playlists_job() -> dict:
     logger.info("Scheduler: starting scheduled refresh")
@@ -760,7 +739,6 @@ def _new_job(playlist_name: str, total: int) -> dict:
         "jellyfin_result": None,
         "navidrome_result": None,
         "deemix_result": None,
-        "slskd_result": None,
         "created_at": datetime.utcnow().isoformat(),
         "completed_at": None,
         "error": None,
@@ -786,7 +764,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     config = load_config()
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
 
-    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome", "deemix", "slskd"}
+    targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome", "deemix"}
 
     # Plex push first — it only needs the track list, not Lidarr results,
     # so the playlist appears in Plex immediately while artists are being added.
@@ -978,41 +956,12 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
             db_increment_stat("spotify_tracks_matched_total", job["spotify_result"].get("matched", 0))
         if job.get("deemix_result"):
             db_increment_stat("deemix_tracks_queued_total", job["deemix_result"].get("queued", 0))
-        if job.get("slskd_result"):
-            db_increment_stat("slskd_tracks_queued_total", job["slskd_result"].get("queued", 0))
-            db_increment_stat("slskd_tracks_flagged_total", job["slskd_result"].get("flagged", 0))
-
-        if config.get("playlist_export_path"):
+if config.get("playlist_export_path"):
             export_playlist_to_path(job["playlist_name"], req.tracks, config["playlist_export_path"])
     except Exception as exc:
         job["error"] = f"Failed to update playlist: {exc}"
         logger.error("Import job %s update error", job_id, exc_info=True)
 
-    # Soulseek background phase — runs after Lidarr so we have artist info
-    if "slskd" in targets and config.get("slskd_url") and config.get("slskd_api_key") and req.tracks:
-        try:
-            slskd = SlskdClient(
-                config["slskd_url"],
-                config["slskd_api_key"],
-                confidence_threshold=int(config.get("slskd_confidence_threshold") or 85),
-            )
-            job["status"] = "running_slskd"
-            sl_result = await slskd.queue_tracks(req.tracks)
-            flagged = [r for r in sl_result["results"] if r["status"] == "flagged"]
-            update_playlist_slskd_result(
-                playlist_id,
-                sl_result["queued"],
-                sl_result["flagged"],
-                len(req.tracks),
-                flagged,
-            )
-            job["slskd_result"] = {
-                "queued": sl_result["queued"],
-                "flagged": sl_result["flagged"],
-                "total": len(req.tracks),
-            }
-        except Exception as exc:
-            logger.error("Soulseek phase failed for job %s: %s", job_id, exc)
 
     job["status"] = "done"
     job["completed_at"] = datetime.utcnow().isoformat()
@@ -1340,20 +1289,6 @@ def get_stats():
     """Hidden endpoint — not linked in the UI. Tracks cumulative usage stats for future use."""
     return db_get_all_stats()
 
-
-@app.post("/api/lidarr/trigger-import")
-async def lidarr_trigger_import():
-    config = load_config()
-    folder = config.get("slskd_lidarr_import_folder", "").strip()
-    if not folder:
-        raise HTTPException(status_code=400, detail="slskd import folder not configured in Settings.")
-    if not config.get("lidarr_url") or not config.get("lidarr_api_key"):
-        raise HTTPException(status_code=400, detail="Lidarr not configured.")
-    try:
-        result = await make_lidarr_client(config).trigger_manual_import(folder)
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Lidarr import failed: {exc}")
 
 
 @app.get("/api/lidarr/wanted")
@@ -2497,138 +2432,6 @@ async def deemix_playlist_tracks(playlist_id: str):
 
 
 # ---------------------------------------------------------------------------
-# slskd endpoints
-# ---------------------------------------------------------------------------
-
-@app.get("/api/slskd/status")
-async def slskd_status():
-    config = load_config()
-    if not config.get("slskd_url") or not config.get("slskd_api_key"):
-        return {"configured": False}
-    try:
-        sl = SlskdClient(config["slskd_url"], config["slskd_api_key"])
-        info = await sl.test_connection()
-        return {"configured": True, **info}
-    except Exception as e:
-        return {"configured": True, "error": str(e)}
-
-
-@app.get("/api/playlists/{playlist_id}/slskd-flagged")
-def get_slskd_flagged(playlist_id: int):
-    """Return the list of flagged Soulseek tracks for manual review."""
-    import json as _json
-    pl = get_playlist(playlist_id)
-    if not pl:
-        raise HTTPException(status_code=404, detail="Playlist not found")
-    raw = pl.get("slskd_flagged_tracks") or "[]"
-    if isinstance(raw, str):
-        try:
-            flagged = _json.loads(raw)
-        except Exception:
-            flagged = []
-    else:
-        flagged = raw
-    return {
-        "flagged": flagged,
-        "queued": pl.get("slskd_queued_count") or 0,
-        "flagged_count": pl.get("slskd_flagged_count") or 0,
-        "total": pl.get("slskd_total_count") or 0,
-    }
-
-
-class SlskdManualQueueRequest(BaseModel):
-    artist: str = Field(max_length=500)
-    title: str = Field(max_length=500)
-    username: str = Field(max_length=200)
-    filename: str = Field(max_length=2000)
-    size: int = Field(default=0, ge=0)
-
-
-@app.post("/api/slskd/queue")
-@limiter.limit("30/minute")
-async def slskd_manual_queue(req: SlskdManualQueueRequest, request: Request):
-    """Manually queue a specific Soulseek file that was flagged for review."""
-    config = load_config()
-    if not config.get("slskd_url") or not config.get("slskd_api_key"):
-        raise HTTPException(status_code=400, detail="slskd not configured.")
-    sl = SlskdClient(config["slskd_url"], config["slskd_api_key"])
-    try:
-        await sl._queue_download(req.username, {"filename": req.filename, "size": req.size})
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"slskd download failed: {exc}")
-    return {"ok": True}
-
-
-class SlskdSearchQueueRequest(BaseModel):
-    tracks: list[dict]
-
-
-_slskd_jobs: dict[str, dict] = {}
-
-
-@app.post("/api/slskd/search-queue")
-@limiter.limit("10/minute")
-async def slskd_search_queue(req: SlskdSearchQueueRequest, request: Request):
-    """Fire-and-forget: start slskd search in background, return job_id immediately."""
-    config = load_config()
-    if not config.get("slskd_url") or not config.get("slskd_api_key"):
-        raise HTTPException(status_code=400, detail="slskd not configured.")
-    job_id = str(uuid.uuid4())
-    _slskd_jobs[job_id] = {"status": "searching"}
-
-    async def _run():
-        try:
-            sl = SlskdClient(
-                config["slskd_url"],
-                config["slskd_api_key"],
-                confidence_threshold=int(config.get("slskd_confidence_threshold") or 75),
-            )
-            result = await sl.queue_tracks(req.tracks)
-            _slskd_jobs[job_id] = {"status": "done", **result}
-        except Exception as exc:
-            _slskd_jobs[job_id] = {"status": "error", "error": str(exc)}
-
-    asyncio.create_task(_run())
-    return {"job_id": job_id, "status": "searching"}
-
-
-@app.get("/api/slskd/job/{job_id}")
-async def slskd_job_status(job_id: str):
-    job = _slskd_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
-    return job
-
-
-class SlskdAlbumRequest(BaseModel):
-    artist: str
-    title: str
-
-
-@app.post("/api/slskd/search-album")
-@limiter.limit("10/minute")
-async def slskd_search_album(req: SlskdAlbumRequest, request: Request):
-    """Fire-and-forget album download: resolve album via MB, find best directory on slskd, queue all files."""
-    config = load_config()
-    if not config.get("slskd_url") or not config.get("slskd_api_key"):
-        raise HTTPException(status_code=400, detail="slskd not configured.")
-    job_id = str(uuid.uuid4())
-    _slskd_jobs[job_id] = {"status": "searching"}
-
-    async def _run():
-        try:
-            sl = SlskdClient(
-                config["slskd_url"],
-                config["slskd_api_key"],
-                confidence_threshold=int(config.get("slskd_confidence_threshold") or 75),
-            )
-            result = await sl.search_and_queue_album(req.artist, req.title)
-            _slskd_jobs[job_id] = {"status": "done", **result}
-        except Exception as exc:
-            _slskd_jobs[job_id] = {"status": "error", "error": str(exc)}
-
-    asyncio.create_task(_run())
-    return {"job_id": job_id, "status": "searching"}
 
 
 # ---------------------------------------------------------------------------
