@@ -64,7 +64,7 @@ DEFAULTS = {
     "deemix_arl": "",
     "slskd_url": "",
     "slskd_api_key": "",
-    "slskd_confidence_threshold": 85,
+    "slskd_confidence_threshold": 75,
 }
 
 # Environment variable overrides for sensitive keys.
