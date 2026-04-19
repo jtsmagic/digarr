@@ -16,6 +16,8 @@ export default function Settings() {
   const [error, setError] = useState(null);
   const [profiles, setProfiles] = useState(null);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
+  const [triggeringImport, setTriggeringImport] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [plexSections, setPlexSections] = useState(null);
   const [loadingPlexSections, setLoadingPlexSections] = useState(false);
   const [spotifyStatus, setSpotifyStatus] = useState(null);
@@ -572,6 +574,31 @@ export default function Settings() {
             </div>
             <span className="text-muted" style={{ fontSize: 11 }}>
               Add in Lidarr → Settings → Connect → Webhook. Triggers: On Import, On Upgrade.
+            </span>
+          </div>
+          <div className="field" style={{ marginBottom: '1rem' }}>
+            <label>Soulseek Download Folder <span className="text-muted" style={{ fontWeight: 400 }}>(Lidarr's internal path)</span></label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input value={config.slskd_lidarr_import_folder || ''}
+                onChange={e => handleChange('slskd_lidarr_import_folder', e.target.value)}
+                placeholder="/import" style={{ fontFamily: 'monospace', fontSize: 12 }} />
+              <button className="btn btn-ghost" style={{ flexShrink: 0, fontSize: 12 }}
+                disabled={triggeringImport || !config.slskd_lidarr_import_folder}
+                onClick={async () => {
+                  setTriggeringImport(true); setImportResult(null);
+                  try {
+                    const { data } = await axios.post('/api/lidarr/trigger-import');
+                    setImportResult(data.imported > 0 ? `✓ Imported ${data.imported} file(s)` : 'No new files to import');
+                  } catch (e) {
+                    setImportResult(`Error: ${e.response?.data?.detail || e.message}`);
+                  } finally { setTriggeringImport(false); }
+                }}>
+                {triggeringImport ? <><span className="spinner" /> Scanning…</> : '↓ Trigger Import Now'}
+              </button>
+            </div>
+            <span className="text-muted" style={{ fontSize: 11 }}>
+              Path Lidarr uses for slskd downloads (e.g. <code>/import</code>). Digarr scans this every 10 minutes automatically.
+              {importResult && <span style={{ marginLeft: 8, color: importResult.startsWith('✓') ? 'var(--green)' : 'var(--red)' }}>{importResult}</span>}
             </span>
           </div>
           <div className="grid-3">

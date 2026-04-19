@@ -312,6 +312,31 @@ class LidarrClient:
             "data": existing,
         }
 
+    async def trigger_manual_import(self, folder: str) -> dict:
+        """
+        Ask Lidarr to scan a folder and auto-import whatever it finds.
+        Uses the ManualImport command with importMode="auto" so no UI approval needed.
+        """
+        # Step 1: get the list of importable files in the folder
+        files = await self._get(f"/manualimport?folder={folder}&filterExistingFiles=true&replaceExistingFiles=false")
+        if not files:
+            logger.info("Lidarr manual import: no importable files found in %s", folder)
+            return {"imported": 0, "folder": folder}
+
+        # Only include files that Lidarr matched to something
+        matched = [f for f in files if f.get("artist") or f.get("album")]
+        if not matched:
+            logger.info("Lidarr manual import: %d files found but none matched in %s", len(files), folder)
+            return {"imported": 0, "unmatched": len(files), "folder": folder}
+
+        result = await self._post("/command", {
+            "name": "ManualImport",
+            "files": matched,
+            "importMode": "auto",
+        })
+        logger.info("Lidarr manual import triggered for %d files in %s: %s", len(matched), folder, result.get("status"))
+        return {"imported": len(matched), "folder": folder, "command": result}
+
     async def add_artist(self, name: str, album_hint: Optional[str] = None, _library: list = None) -> dict:
         logger.info("add_artist called: name=%r album_hint=%r", name, album_hint)
 

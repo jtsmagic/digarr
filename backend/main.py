@@ -244,6 +244,7 @@ async def startup():
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
     _reschedule_jellyfin_sync(int(config.get("jellyfin_sync_interval_hours") or 0))
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
+    _reschedule_lidarr_import(bool(config.get("slskd_lidarr_import_folder", "").strip()))
     scheduler.start()
 
 @app.on_event("shutdown")
@@ -529,6 +530,7 @@ def update_config(config: dict):
     _reschedule_plex_sync(int(config.get("plex_sync_interval_hours") or 0))
     _reschedule_jellyfin_sync(int(config.get("jellyfin_sync_interval_hours") or 0))
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
+    _reschedule_lidarr_import(bool(config.get("slskd_lidarr_import_folder")))
     return {"status": "ok"}
 
 def _reschedule(hours: int):
@@ -560,6 +562,25 @@ def _reschedule_navidrome_sync(hours: int):
         scheduler.remove_job("navidrome_sync_all")
     if hours > 0:
         scheduler.add_job(_navidrome_sync_all_job, IntervalTrigger(hours=hours), id="navidrome_sync_all", replace_existing=True)
+
+async def _lidarr_import_job():
+    config = load_config()
+    folder = config.get("slskd_lidarr_import_folder", "").strip()
+    if not folder or not config.get("lidarr_url") or not config.get("lidarr_api_key"):
+        return
+    try:
+        lc = make_lidarr_client(config)
+        result = await lc.trigger_manual_import(folder)
+        if result.get("imported", 0) > 0:
+            logger.info("Lidarr auto-import: imported %d files from %s", result["imported"], folder)
+    except Exception as exc:
+        logger.warning("Lidarr auto-import job failed: %s", exc)
+
+def _reschedule_lidarr_import(enabled: bool):
+    if scheduler.get_job("lidarr_import"):
+        scheduler.remove_job("lidarr_import")
+    if enabled:
+        scheduler.add_job(_lidarr_import_job, IntervalTrigger(minutes=10), id="lidarr_import", replace_existing=True)
 
 async def _refresh_all_playlists_job() -> dict:
     logger.info("Scheduler: starting scheduled refresh")
@@ -1318,6 +1339,21 @@ async def get_profiles():
 def get_stats():
     """Hidden endpoint — not linked in the UI. Tracks cumulative usage stats for future use."""
     return db_get_all_stats()
+
+
+@app.post("/api/lidarr/trigger-import")
+async def lidarr_trigger_import():
+    config = load_config()
+    folder = config.get("slskd_lidarr_import_folder", "").strip()
+    if not folder:
+        raise HTTPException(status_code=400, detail="slskd import folder not configured in Settings.")
+    if not config.get("lidarr_url") or not config.get("lidarr_api_key"):
+        raise HTTPException(status_code=400, detail="Lidarr not configured.")
+    try:
+        result = await make_lidarr_client(config).trigger_manual_import(folder)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Lidarr import failed: {exc}")
 
 
 @app.get("/api/lidarr/wanted")
