@@ -46,6 +46,7 @@ export default function History() {
   const [wantedData, setWantedData] = useState(null);
   const [wantedLoading, setWantedLoading] = useState(false);
   const [lidarrConfigured, setLidarrConfigured] = useState(false);
+  const [slskdConfigured, setSlskdConfigured] = useState(false);
   const [importJobs, setImportJobs] = useState([]);
   const completedJobIds = useRef(new Set());
   const dismissedJobIds = useRef(new Set());
@@ -58,6 +59,7 @@ export default function History() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchSaved, setSearchSaved] = useState(null); // track key that was just saved
   const [manualMatches, setManualMatches] = useState({}); // { "artist||title" → matched track }
+  const [slskdQueuing, setSlskdQueuing] = useState({}); // { "artist||title" → "queuing"|"queued"|"error" }
   const [ignoredTracks, setIgnoredTracks] = useState(new Set()); // Set of "artist_lower||title_lower"
   const [expandedIgnored, setExpandedIgnored] = useState({}); // { playlistId → bool }
 
@@ -73,6 +75,7 @@ export default function History() {
     axios.get('/api/spotify/status').then(r => setSpotifyConnected(r.data.connected)).catch(() => {});
     axios.get('/api/jellyfin/status').then(r => setJellyfinConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
+    axios.get('/api/slskd/status').then(r => setSlskdConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
@@ -510,12 +513,6 @@ export default function History() {
       <h1 className="page-title">History</h1>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <p className="page-subtitle" style={{ margin: 0 }}>All your past imports — {playlists.length} total</p>
-        {playlists.some(p => p.plex_playlist_id) && (
-          <button className="btn btn-ghost" style={{ fontSize: 11, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-            disabled={syncAllLoading} onClick={handleSyncAll}>
-            {syncAllLoading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</> : '⟳ Sync All to Plex'}
-          </button>
-        )}
         {jellyfinConfigured && playlists.some(p => p.jellyfin_playlist_id) && (
           <button className="btn btn-ghost" style={{ fontSize: 11, color: '#00a4dc', borderColor: '#00a4dc' }}
             disabled={jellyfinSyncAllLoading} onClick={handleSyncAllJellyfin}>
@@ -1125,7 +1122,7 @@ export default function History() {
                                                       ✓ matched
                                                     </span>
                                                   ) : (
-                                                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                                                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                                                       <button
                                                         className="btn btn-ghost"
                                                         style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1 }}
@@ -1133,6 +1130,30 @@ export default function History() {
                                                       >
                                                         Search library
                                                       </button>
+                                                      {slskdConfigured && (() => {
+                                                        const qState = slskdQueuing[matchKey];
+                                                        if (qState === 'queued') return (
+                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ queued</span>
+                                                        );
+                                                        return (
+                                                          <button
+                                                            className="btn btn-ghost"
+                                                            style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                                                            disabled={qState === 'queuing'}
+                                                            onClick={async () => {
+                                                              setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'queuing' }));
+                                                              try {
+                                                                await axios.post('/api/slskd/search-queue', { tracks: [{ artist: t.artist, title: t.title }] });
+                                                                setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'queued' }));
+                                                              } catch {
+                                                                setSlskdQueuing(prev => ({ ...prev, [matchKey]: 'error' }));
+                                                              }
+                                                            }}
+                                                          >
+                                                            {qState === 'queuing' ? '…' : 'Soulseek'}
+                                                          </button>
+                                                        );
+                                                      })()}
                                                       <button
                                                         className="btn btn-ghost"
                                                         style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1, borderColor: 'var(--border)', color: 'var(--text-muted)' }}
