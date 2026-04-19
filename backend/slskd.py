@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _SEARCH_SEMAPHORE_LIMIT = 2  # max concurrent slskd searches
 _search_semaphore: asyncio.Semaphore | None = None
 
-_SEARCH_TIMEOUT = 30       # seconds to wait for slskd search completion
+_SEARCH_TIMEOUT = 60       # seconds to wait for slskd search completion
 _POLL_INTERVAL = 2.0       # seconds between poll attempts
 _PREFERRED_EXTS = {".flac", ".mp3", ".ogg", ".m4a", ".opus"}
 
@@ -154,6 +154,7 @@ class SlskdClient:
 
     async def _poll_search(self, search_id: str) -> list[dict]:
         deadline = asyncio.get_event_loop().time() + _SEARCH_TIMEOUT
+        last_responses: list[dict] = []
         async with httpx.AsyncClient(timeout=10) as client:
             while asyncio.get_event_loop().time() < deadline:
                 r = await client.get(
@@ -165,10 +166,13 @@ class SlskdClient:
                 r.raise_for_status()
                 data = r.json()
                 state = data.get("state", "")
+                last_responses = data.get("responses") or []
                 if state in ("Completed", "TimedOut", "Cancelled"):
-                    return data.get("responses") or []
+                    logger.info("slskd search %s done (state=%s, responses=%d)", search_id[:8], state, len(last_responses))
+                    return last_responses
                 await asyncio.sleep(_POLL_INTERVAL)
-        return []
+        logger.warning("slskd search %s timed out locally, returning %d partial responses", search_id[:8], len(last_responses))
+        return last_responses
 
     async def _queue_download(self, username: str, file: dict) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -212,6 +216,7 @@ class SlskdClient:
                     continue
                 flat_files.append({**f, "_username": username})
 
+        logger.info("slskd: %d usable files for %r / %r", len(flat_files), artist, title)
         if not flat_files:
             return {"status": "not_found", "score": 0, "candidates": [], "mb_duration_ms": None}
 
@@ -236,6 +241,7 @@ class SlskdClient:
             })
         scored.sort(key=lambda x: x["score"], reverse=True)
         best = scored[0]
+        logger.info("slskd: best score %.1f (threshold %d) for %r / %r — %s", best["score"], self.threshold, artist, title, best["filename"][-60:])
 
         if best["score"] >= self.threshold:
             try:
