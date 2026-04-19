@@ -285,6 +285,90 @@ class SlskdClient:
                 "mb_duration_ms": mb_duration_ms,
             }
 
+    def _dir_of(self, filename: str) -> str:
+        """Return the directory portion of a slskd filename (backslash or forward slash)."""
+        for sep in ("\\", "/"):
+            if sep in filename:
+                return filename.rsplit(sep, 1)[0]
+        return ""
+
+    async def search_and_queue_album(self, artist: str, title: str) -> dict:
+        """
+        Use MusicBrainz to resolve the album for artist+title, then search slskd
+        for "artist album", group results by peer+directory, and queue the most
+        complete directory (highest audio file count).
+
+        Returns:
+          status: "queued" | "not_found" | "error"
+          album: str — album name used for the search
+          queued_count: int
+          username: str
+          directory: str
+        """
+        # Step 1: resolve album name via MusicBrainz
+        mb: dict = {}
+        try:
+            mb = await mb_lookup_track(artist, title)
+        except Exception:
+            pass
+
+        album = mb.get("album", "")
+        canonical_artist = mb.get("canonical_artist", artist)
+        query = f"{canonical_artist} {album}" if album else f"{artist} {title}"
+        logger.info("slskd album search query: %r (album=%r)", query, album)
+
+        async with _get_semaphore():
+            try:
+                search_id = await self._start_search(query)
+            except Exception as exc:
+                return {"status": "error", "error": str(exc), "album": album, "queued_count": 0}
+            responses = await self._poll_search(search_id)
+
+        # Flatten audio files, keyed by (username, directory)
+        dir_files: dict[tuple[str, str], list[dict]] = {}
+        for resp in responses:
+            username = resp.get("username", "")
+            for f in resp.get("files") or []:
+                ext = ("." + f.get("filename", "").rsplit(".", 1)[-1]).lower() if "." in f.get("filename", "") else ""
+                if ext not in _PREFERRED_EXTS:
+                    continue
+                d = self._dir_of(f.get("filename", ""))
+                key = (username, d)
+                dir_files.setdefault(key, []).append({**f, "_username": username})
+
+        if not dir_files:
+            return {"status": "not_found", "album": album, "queued_count": 0, "username": "", "directory": ""}
+
+        # Pick the directory with the most audio files
+        best_key = max(dir_files, key=lambda k: len(dir_files[k]))
+        best_username, best_dir = best_key
+        best_files = dir_files[best_key]
+        logger.info("slskd album: best dir %r from %r (%d files)", best_dir, best_username, len(best_files))
+
+        # Queue all files in that directory
+        queued_count = 0
+        async with httpx.AsyncClient(timeout=10) as client:
+            payload = [{"filename": f["filename"], "size": f.get("size", 0)} for f in best_files]
+            try:
+                r = await client.post(
+                    f"{self.base_url}/api/v0/transfers/downloads/{best_username}",
+                    json=payload,
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                queued_count = len(best_files)
+            except Exception as exc:
+                logger.warning("slskd album download failed: %s", exc)
+                return {"status": "error", "error": str(exc), "album": album, "queued_count": 0, "username": best_username, "directory": best_dir}
+
+        return {
+            "status": "queued",
+            "album": album or query,
+            "queued_count": queued_count,
+            "username": best_username,
+            "directory": best_dir,
+        }
+
     async def queue_tracks(self, tracks: list[dict]) -> dict:
         """
         Search and optionally queue a list of tracks.

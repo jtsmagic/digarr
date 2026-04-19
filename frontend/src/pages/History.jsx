@@ -62,6 +62,7 @@ export default function History() {
   const [searchSaved, setSearchSaved] = useState(null); // track key that was just saved
   const [manualMatches, setManualMatches] = useState({}); // { "artist||title" → matched track }
   const [slskdQueuing, setSlskdQueuing] = useState({}); // { "artist||title" → "queuing"|"queued"|"error" }
+  const [slskdAlbumQueuing, setSlskdAlbumQueuing] = useState({}); // { "artist||title" → "queuing"|"queued"|"error"|{album,count} }
   const [ignoredTracks, setIgnoredTracks] = useState(new Set()); // Set of "artist_lower||title_lower"
   const [expandedIgnored, setExpandedIgnored] = useState({}); // { playlistId → bool }
 
@@ -1195,6 +1196,44 @@ export default function History() {
                                                             }}
                                                           >
                                                             {qState === 'queuing' ? '…' : 'Soulseek'}
+                                                          </button>
+                                                        );
+                                                      })()}
+                                                      {slskdConfigured && (() => {
+                                                        const aState = slskdAlbumQueuing[matchKey];
+                                                        if (aState && typeof aState === 'object') return (
+                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ {aState.count} files ({aState.album})</span>
+                                                        );
+                                                        if (aState === 'queued') return (
+                                                          <span style={{ fontSize: 9, color: 'var(--green)', alignSelf: 'center' }}>✓ album queued</span>
+                                                        );
+                                                        return (
+                                                          <button className="btn btn-ghost"
+                                                            style={{ fontSize: 9, padding: '3px 8px', color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                                                            disabled={aState === 'queuing'}
+                                                            onClick={async () => {
+                                                              setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'queuing' }));
+                                                              try {
+                                                                const { data } = await axios.post('/api/slskd/search-album', { artist: t.artist, title: t.title });
+                                                                const jobId = data.job_id;
+                                                                const poll = setInterval(async () => {
+                                                                  try {
+                                                                    const { data: job } = await axios.get(`/api/slskd/job/${jobId}`);
+                                                                    if (job.status === 'done' || job.status === 'error') {
+                                                                      clearInterval(poll);
+                                                                      if (job.status === 'done' && job.queued_count > 0) {
+                                                                        setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: { album: job.album, count: job.queued_count } }));
+                                                                      } else {
+                                                                        setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: job.status === 'done' ? 'queued' : 'error' }));
+                                                                      }
+                                                                    }
+                                                                  } catch { clearInterval(poll); setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'error' })); }
+                                                                }, 2000);
+                                                              } catch {
+                                                                setSlskdAlbumQueuing(prev => ({ ...prev, [matchKey]: 'error' }));
+                                                              }
+                                                            }}>
+                                                            {aState === 'queuing' ? '…' : 'Album'}
                                                           </button>
                                                         );
                                                       })()}
