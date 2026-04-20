@@ -648,10 +648,19 @@ async def _plex_sync_all_job() -> dict:
             if len(matched_keys) <= current_matched:
                 continue  # nothing new — skip
             # Delete old Plex playlist and recreate with updated track list
+            _plex_old_gone = False
             try:
                 await plex_client.delete_playlist(pl["plex_playlist_id"])
-            except Exception:
-                pass
+                _plex_old_gone = True
+            except httpx.HTTPStatusError as _e:
+                if _e.response.status_code == 404:
+                    _plex_old_gone = True  # already gone
+                else:
+                    logger.warning("Plex sync: delete failed for '%s' (%s), skipping recreate to avoid duplicate", pl['name'], _e)
+            except Exception as _e:
+                logger.warning("Plex sync: delete failed for '%s' (%s), skipping recreate to avoid duplicate", pl['name'], _e)
+            if not _plex_old_gone:
+                continue
             plex_name = _plex_playlist_name(pl["name"], config)
             new_id = await plex_client.create_playlist(plex_name, matched_keys)
             update_playlist_plex_result(pl["id"], new_id, len(matched_keys), total, unmatched,
@@ -1705,11 +1714,20 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
             current_matched = pl.get("plex_matched_count") or 0
             if tracks_changed or len(matched_keys) > current_matched:
                 old_plex_id = pl.get("plex_playlist_id")
+                _plex_old_gone = not old_plex_id
                 if old_plex_id:
                     try:
                         await plex_client.delete_playlist(old_plex_id)
-                    except Exception:
-                        pass
+                        _plex_old_gone = True
+                    except httpx.HTTPStatusError as _e:
+                        if _e.response.status_code == 404:
+                            _plex_old_gone = True
+                        else:
+                            logger.warning("Plex refresh: delete failed (%s), skipping recreate to avoid duplicate", _e)
+                    except Exception as _e:
+                        logger.warning("Plex refresh: delete failed (%s), skipping recreate to avoid duplicate", _e)
+                if not _plex_old_gone:
+                    raise RuntimeError(f"Could not delete old Plex playlist {old_plex_id}")
                 plex_name = _plex_playlist_name(pl["name"], config)
                 new_plex_id = await plex_client.create_playlist(plex_name, matched_keys)
                 if album_hint_map:
@@ -2072,14 +2090,21 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
     total = len(tracks)
 
     old_plex_id = pl.get("plex_playlist_id")
+    _plex_old_gone = not old_plex_id
     if old_plex_id:
         try:
             await plex_client.delete_playlist(old_plex_id)
-        except Exception:
-            pass
+            _plex_old_gone = True
+        except httpx.HTTPStatusError as _e:
+            if _e.response.status_code == 404:
+                _plex_old_gone = True
+            else:
+                logger.warning("Plex push: delete failed (%s), skipping recreate to avoid duplicate", _e)
+        except Exception as _e:
+            logger.warning("Plex push: delete failed (%s), skipping recreate to avoid duplicate", _e)
 
     plex_playlist_id = None
-    if matched_keys:
+    if matched_keys and _plex_old_gone:
         plex_name = _plex_playlist_name(pl["name"], config)
         plex_playlist_id = await plex_client.create_playlist(plex_name, matched_keys)
         update_playlist_plex_result(playlist_id, plex_playlist_id,
@@ -2787,11 +2812,20 @@ async def _rematch_playlist_plex(playlist_id: int) -> None:
         if len(matched_keys) > current_matched:
             logger.info("Lidarr webhook: playlist %d gained %d new Plex matches", playlist_id, len(matched_keys) - current_matched)
             old_plex_id = pl.get("plex_playlist_id")
+            _plex_old_gone = not old_plex_id
             if old_plex_id:
                 try:
                     await plex_client.delete_playlist(old_plex_id)
-                except Exception:
-                    pass
+                    _plex_old_gone = True
+                except httpx.HTTPStatusError as _e:
+                    if _e.response.status_code == 404:
+                        _plex_old_gone = True
+                    else:
+                        logger.warning("Lidarr rematch: Plex delete failed (%s), skipping recreate to avoid duplicate", _e)
+                except Exception as _e:
+                    logger.warning("Lidarr rematch: Plex delete failed (%s), skipping recreate to avoid duplicate", _e)
+            if not _plex_old_gone:
+                return
             plex_name = _plex_playlist_name(pl["name"], config)
             new_plex_id = await plex_client.create_playlist(plex_name, matched_keys)
             update_playlist_plex_result(playlist_id, new_plex_id, len(matched_keys), total, unmatched, plex_playlist_name=plex_name)
