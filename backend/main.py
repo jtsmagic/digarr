@@ -1519,8 +1519,18 @@ async def rename_playlist_route(playlist_id: int, req: RenamePlaylistRequest):
     rename_playlist(playlist_id, new_name, plex_playlist_name=plex_playlist_name if pl.get("plex_playlist_id") else None)
     return {"ok": True, "name": new_name}
 
+_refresh_locks: dict[int, asyncio.Lock] = {}
+
 async def _do_refresh_playlist(playlist_id: int) -> dict:
     """Shared refresh logic used by the API endpoint and the scheduler."""
+    if playlist_id not in _refresh_locks:
+        _refresh_locks[playlist_id] = asyncio.Lock()
+    if _refresh_locks[playlist_id].locked():
+        raise ValueError(f"Playlist {playlist_id} is already being refreshed")
+    async with _refresh_locks[playlist_id]:
+        return await _do_refresh_playlist_inner(playlist_id)
+
+async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     config = load_config()
     pl = get_playlist(playlist_id)
     if not pl:
