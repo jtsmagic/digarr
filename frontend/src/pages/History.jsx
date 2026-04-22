@@ -869,7 +869,7 @@ const handlePushToSpotify = async (pl) => {
 
                         {/* Sync Plex — primary action */}
                         <button className="btn btn-ghost" style={{ fontSize: 10, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                          disabled={sync.loading} onClick={e => handleSyncPlex(e, pl)}>
+                          disabled={sync.loading || refresh.loading} onClick={e => handleSyncPlex(e, pl)}>
                           {sync.loading
                             ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
                             : pl.plex_playlist_id ? '⟳ Sync Plex' : '▶ Push to Plex'}
