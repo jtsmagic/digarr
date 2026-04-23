@@ -105,6 +105,7 @@ from database import (
     db_save_import_job, db_load_recent_import_jobs, db_prune_import_jobs,
     update_playlist_deemix_result,
     db_increment_stat, db_set_stat_text, db_set_stat_text_if_unset, db_get_all_stats,
+    try_claim_refresh, clear_refresh_lock,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -1523,12 +1524,19 @@ _refresh_locks: dict[int, asyncio.Lock] = {}
 
 async def _do_refresh_playlist(playlist_id: int) -> dict:
     """Shared refresh logic used by the API endpoint and the scheduler."""
+    # In-process guard (fast path for same-process concurrent calls)
     if playlist_id not in _refresh_locks:
         _refresh_locks[playlist_id] = asyncio.Lock()
     if _refresh_locks[playlist_id].locked():
         raise ValueError(f"Playlist {playlist_id} is already being refreshed")
+    # DB-level guard (cross-process: catches home + work tab both refreshing)
+    if not try_claim_refresh(playlist_id):
+        raise ValueError(f"Playlist {playlist_id} is already being refreshed")
     async with _refresh_locks[playlist_id]:
-        return await _do_refresh_playlist_inner(playlist_id)
+        try:
+            return await _do_refresh_playlist_inner(playlist_id)
+        finally:
+            clear_refresh_lock(playlist_id)
 
 async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     config = load_config()
