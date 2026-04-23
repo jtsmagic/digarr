@@ -7,6 +7,16 @@ from utils import normalize as _normalize
 
 logger = logging.getLogger(__name__)
 
+_CAST_KEYWORDS = {"broadway", "cast", "musical", "soundtrack", "original cast", "recording", "score", "theatre", "theater", "west end"}
+
+def _is_cast_context(name: str) -> bool:
+    n = (name or "").lower()
+    return any(kw in n for kw in _CAST_KEYWORDS)
+
+def _cast_score(name: str) -> int:
+    n = (name or "").lower()
+    return sum(1 for kw in _CAST_KEYWORDS if kw in n)
+
 
 class PlexClient:
     def __init__(self, base_url: str, token: str, section_id: str):
@@ -46,7 +56,7 @@ class PlexClient:
         sections = r.json().get('MediaContainer', {}).get('Directory', [])
         return [{"id": str(s['key']), "title": s['title'], "type": s['type']} for s in sections]
 
-    async def search_track(self, artist: str, title: str, album: str = "") -> Optional[str]:
+    async def search_track(self, artist: str, title: str, album: str = "", playlist_name: str = "") -> Optional[str]:
         """Search Plex music library for a track. Returns ratingKey or None."""
         if not title:
             return None
@@ -99,9 +109,12 @@ class PlexClient:
             # Any-artist fallback — skip short titles that commonly collide across artists
             # (e.g. "I Believe", "Proud Mary" = 8-9 chars stripped; "Defying Gravity" = 14)
             if len(query_norm.replace(" ", "")) >= 12:
-                for t in candidates:
-                    if _normalize(t.get('title', '')) == query_norm:
-                        return t['ratingKey']
+                title_matches = [t for t in candidates if _normalize(t.get('title', '')) == query_norm]
+                if title_matches:
+                    if _is_cast_context(playlist_name):
+                        # Prefer results whose album or artist name contains cast keywords
+                        title_matches.sort(key=lambda t: _cast_score(t.get('parentTitle', '')) + _cast_score(t.get('grandparentTitle', '')), reverse=True)
+                    return title_matches[0]['ratingKey']
             return None
 
         def _title_variants(t: str) -> list:
@@ -142,7 +155,7 @@ class PlexClient:
 
         return None
 
-    async def match_tracks(self, tracks: List[dict]) -> Tuple[List[str], List[dict], int]:
+    async def match_tracks(self, tracks: List[dict], playlist_name: str = "") -> Tuple[List[str], List[dict], int]:
         """
         Match a list of {artist, title} dicts against the Plex library.
         Returns (matched_ratingKeys, unmatched_tracks, total_track_count).
@@ -156,6 +169,7 @@ class PlexClient:
                         track.get('artist', ''),
                         track.get('title', ''),
                         track.get('album', ''),
+                        playlist_name,
                     )
                 except Exception as exc:
                     logger.warning("Plex search error for %r / %r: %s", track.get('artist'), track.get('title'), exc)
