@@ -1737,7 +1737,7 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     if pl.get("plex_playlist_id") and config.get("plex_url") and config.get("plex_token") and config.get("plex_library_section_id"):
         try:
             plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
-            matched_keys, unmatched, total = await plex_client.match_tracks(tracks_to_save)
+            matched_keys, unmatched, total = await plex_client.match_tracks(tracks_to_save, playlist_name=pl.get("name", ""))
             current_matched = pl.get("plex_matched_count") or 0
             if tracks_changed or len(matched_keys) > current_matched:
                 old_plex_id = pl.get("plex_playlist_id")
@@ -2129,7 +2129,7 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
         else:
             live_tracks.append(t)
 
-    live_matched_keys, unmatched, _ = await plex_client.match_tracks(live_tracks)
+    live_matched_keys, unmatched, _ = await plex_client.match_tracks(live_tracks, playlist_name=pl.get("name", ""))
     matched_keys = pre_matched_keys + cache_matched_keys + live_matched_keys
     total = len(tracks)
 
