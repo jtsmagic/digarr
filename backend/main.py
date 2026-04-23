@@ -1653,7 +1653,7 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
         lidarr = make_lidarr_client(config)
         library = await lidarr.get_all_artists()
         raw = await asyncio.gather(
-            *[lidarr.add_artist(name, album_hint=album_hint_map.get(name), _library=library) for name in net_new_names],
+            *[lidarr.add_artist(name, album_hint=album_hint_map.get(name), _library=library, playlist_name=pl.get("name", "")) for name in net_new_names],
             return_exceptions=True,
         )
         lidarr_results = [

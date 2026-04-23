@@ -7,6 +7,17 @@ from utils import normalize as _normalize
 
 logger = logging.getLogger(__name__)
 
+_CAST_KEYWORDS = {"broadway", "cast", "musical", "soundtrack", "original cast", "recording", "score", "theatre", "theater", "west end"}
+
+def _is_cast_playlist(playlist_name: str) -> bool:
+    name_lower = (playlist_name or "").lower()
+    return any(kw in name_lower for kw in _CAST_KEYWORDS)
+
+def _cast_score(artist_name: str) -> int:
+    """Higher = more likely to be a cast recording / musical artist."""
+    name_lower = (artist_name or "").lower()
+    return sum(1 for kw in _CAST_KEYWORDS if kw in name_lower)
+
 
 class LidarrClient:
     def __init__(self, base_url: str, api_key: str, quality_profile_id: int = 1,
@@ -337,8 +348,8 @@ class LidarrClient:
         logger.info("Lidarr manual import triggered for %d files in %s: %s", len(matched), folder, result.get("status"))
         return {"imported": len(matched), "folder": folder, "command": result}
 
-    async def add_artist(self, name: str, album_hint: Optional[str] = None, _library: list = None) -> dict:
-        logger.info("add_artist called: name=%r album_hint=%r", name, album_hint)
+    async def add_artist(self, name: str, album_hint: Optional[str] = None, _library: list = None, playlist_name: str = "") -> dict:
+        logger.info("add_artist called: name=%r album_hint=%r playlist_name=%r", name, album_hint, playlist_name)
 
         # Check if already exists — use pre-fetched library if provided to avoid redundant HTTP calls
         existing = (self._match_in_library(name, _library) if _library is not None
@@ -355,6 +366,12 @@ class LidarrClient:
                 "message": f"Could not find {name} in MusicBrainz",
                 "album_monitored": None,
             }
+
+        # Re-rank for cast/musical playlists: prefer results whose artistName contains
+        # cast-recording keywords (e.g. "Original Broadway Cast of Hamilton" > "Anthony Hamilton")
+        if _is_cast_playlist(playlist_name):
+            results = sorted(results, key=lambda r: _cast_score(r.get("artistName", "")), reverse=True)
+            logger.info("Cast playlist detected — re-ranked top result for %r: %r", name, results[0].get("artistName"))
 
         top = results[0]
         logger.info("MusicBrainz top result for %r: %r (id=%s)",
