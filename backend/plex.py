@@ -96,6 +96,12 @@ class PlexClient:
                     if (_normalize(t.get('title', '')) == query_norm and
                             album_norm in _normalize(t.get('parentTitle', ''))):
                         return t['ratingKey']
+            # Any-artist fallback — skip short titles that commonly collide across artists
+            # (e.g. "I Believe", "Proud Mary" = 8-9 chars stripped; "Defying Gravity" = 14)
+            if len(query_norm.replace(" ", "")) >= 12:
+                for t in candidates:
+                    if _normalize(t.get('title', '')) == query_norm:
+                        return t['ratingKey']
             return None
 
         def _title_variants(t: str) -> list:

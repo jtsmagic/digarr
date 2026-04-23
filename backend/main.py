@@ -2158,59 +2158,10 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
     }
 
 
-async def _enrich_and_resync_plex(playlist_id: int) -> None:
-    """Background task: fill missing track albums via MusicBrainz then re-sync Plex."""
-    pl = get_playlist(playlist_id)
-    if not pl:
-        return
-    tracks = pl.get("tracks") or []
-    needing = [t for t in tracks if not t.get("album") or t.get("album") in ("null", None)]
-    if not needing:
-        return
-
-    enriched_map: dict[tuple, str] = {}
-    for t in needing:
-        artist, title = t.get("artist", ""), t.get("title", "")
-        if artist and title:
-            try:
-                mb = await mb_lookup_track(artist, title)
-                if mb.get("album"):
-                    enriched_map[(artist.lower(), title.lower())] = mb["album"]
-            except Exception as exc:
-                logger.warning("MB enrichment failed for %r / %r: %s", artist, title, exc)
-
-    if not enriched_map:
-        return
-
-    def _enrich(t):
-        key = (t.get("artist", "").lower(), t.get("title", "").lower())
-        if key in enriched_map and (not t.get("album") or t.get("album") in ("null", None)):
-            return {**t, "album": enriched_map[key]}
-        return t
-
-    enriched_tracks = [_enrich(t) for t in tracks]
-    if any(e.get("album") != t.get("album") for t, e in zip(tracks, enriched_tracks)):
-        update_playlist_tracks(playlist_id, enriched_tracks)
-        logger.info("Album enrichment: updated %d tracks for playlist %d", len(enriched_map), playlist_id)
-
-    # Re-sync Plex with the now-enriched track data
-    config = load_config()
-    if config.get("plex_url") and config.get("plex_token") and config.get("plex_library_section_id"):
-        pl = get_playlist(playlist_id)
-        if pl:
-            plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
-            all_lidarr_artists = None
-            if config.get("lidarr_url") and config.get("lidarr_api_key"):
-                all_lidarr_artists = await make_lidarr_client(config).get_all_artists()
-            try:
-                await _do_sync_plex_playlist(pl, plex_client, all_lidarr_artists, config)
-                logger.info("Background Plex re-sync complete for playlist %d", playlist_id)
-            except Exception as exc:
-                logger.error("Background Plex re-sync failed for playlist %d: %s", playlist_id, exc)
 
 
 @app.post("/api/plex/playlist/{playlist_id}/sync")
-async def sync_plex_playlist(playlist_id: int, background_tasks: BackgroundTasks):
+async def sync_plex_playlist(playlist_id: int):
     config = load_config()
     if not config.get("plex_url") or not config.get("plex_token"):
         raise HTTPException(status_code=400, detail="Plex not configured. Add your Plex URL and token in Settings.")
@@ -2226,11 +2177,6 @@ async def sync_plex_playlist(playlist_id: int, background_tasks: BackgroundTasks
     all_lidarr_artists = None
     if config.get("lidarr_url") and config.get("lidarr_api_key"):
         all_lidarr_artists = await make_lidarr_client(config).get_all_artists()
-
-    # If any tracks are missing albums, kick off background enrichment + re-sync
-    tracks = pl.get("tracks") or []
-    if any(not t.get("album") or t.get("album") in ("null", None) for t in tracks):
-        background_tasks.add_task(_enrich_and_resync_plex, playlist_id)
 
     return await _do_sync_plex_playlist(pl, plex_client, all_lidarr_artists, config)
 
