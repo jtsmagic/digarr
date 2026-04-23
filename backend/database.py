@@ -189,6 +189,7 @@ def init_db():
         ("slskd_total_count", "INTEGER"),
         ("slskd_flagged_tracks", "TEXT"),
         ("last_refresh_new_artists", "TEXT"),
+        ("refresh_started_at", "TEXT"),
     ]:
         try:
             c.execute(f"ALTER TABLE playlists ADD COLUMN {col} {typedef}")
@@ -426,6 +427,29 @@ def update_playlist_last_refresh_artists(playlist_id: int, new_artists: list) ->
     conn = get_db()
     conn.execute("UPDATE playlists SET last_refresh_new_artists = ? WHERE id = ?",
                  (json.dumps(new_artists), playlist_id))
+    conn.commit()
+    conn.close()
+
+
+def try_claim_refresh(playlist_id: int, timeout_seconds: int = 600) -> bool:
+    """Atomically claim a refresh slot. Returns True if claimed, False if already running."""
+    from datetime import datetime, timezone, timedelta
+    conn = get_db()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
+    cur = conn.execute(
+        "UPDATE playlists SET refresh_started_at = ? WHERE id = ? AND (refresh_started_at IS NULL OR refresh_started_at < ?)",
+        (now.isoformat(), playlist_id, cutoff),
+    )
+    claimed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return claimed
+
+
+def clear_refresh_lock(playlist_id: int) -> None:
+    conn = get_db()
+    conn.execute("UPDATE playlists SET refresh_started_at = NULL WHERE id = ?", (playlist_id,))
     conn.commit()
     conn.close()
 
