@@ -2103,6 +2103,30 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
         else:
             live_tracks.append(t)
 
+    # Enrich tracks missing album data via MusicBrainz, then persist back so
+    # future syncs skip the lookup entirely.
+    tracks_needing_album = [t for t in live_tracks if not t.get("album") or t.get("album") in ("null", None)]
+    if tracks_needing_album:
+        enriched_map: dict[tuple, str] = {}
+        for t in tracks_needing_album:
+            artist, title = t.get("artist", ""), t.get("title", "")
+            if artist and title:
+                mb = await mb_lookup_track(artist, title)
+                if mb.get("album"):
+                    enriched_map[(artist.lower(), title.lower())] = mb["album"]
+        if enriched_map:
+            def _enrich(t):
+                key = (t.get("artist", "").lower(), t.get("title", "").lower())
+                if key in enriched_map and (not t.get("album") or t.get("album") in ("null", None)):
+                    return {**t, "album": enriched_map[key]}
+                return t
+            live_tracks = [_enrich(t) for t in live_tracks]
+            # Persist enriched albums back to DB so future syncs skip MB lookup
+            all_enriched = [_enrich(t) for t in tracks]
+            if any(e.get("album") != t.get("album") for t, e in zip(tracks, all_enriched)):
+                update_playlist_tracks(playlist_id, all_enriched)
+                tracks = all_enriched
+
     live_matched_keys, unmatched, _ = await plex_client.match_tracks(live_tracks)
     matched_keys = pre_matched_keys + cache_matched_keys + live_matched_keys
     total = len(tracks)
