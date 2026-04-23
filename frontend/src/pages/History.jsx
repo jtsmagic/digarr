@@ -325,11 +325,27 @@ const handlePushToSpotify = async (pl) => {
     setConfirmRefresh(null);
     setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
     try {
-      const res = await axios.post(`/api/playlists/${pl.id}/refresh`);
+      const startRes = await axios.post(`/api/playlists/${pl.id}/refresh`);
+      const jobId = startRes.data.job_id;
+
+      // Poll until done
+      const data = await new Promise((resolve, reject) => {
+        const poll = async () => {
+          try {
+            const res = await axios.get(`/api/playlists/${pl.id}/refresh/status`);
+            if (res.data.status === 'done') return resolve(res.data.result);
+            if (res.data.status === 'error') return reject(new Error(res.data.error || 'Refresh failed.'));
+            setTimeout(poll, 2000);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        poll();
+      });
 
       // Use the backend's auto-sync results if they fired (only fires when matched count grew)
       let mediaUpdate = {};
-      const ps = res.data.plex_sync;
+      const ps = data.plex_sync;
       if (ps) {
         mediaUpdate = {
           ...mediaUpdate,
@@ -340,25 +356,25 @@ const handlePushToSpotify = async (pl) => {
         };
         setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ps, error: null } }));
       }
-      const js = res.data.jellyfin_sync;
+      const js = data.jellyfin_sync;
       if (js) {
         mediaUpdate = { ...mediaUpdate, jellyfin_matched_count: js.matched, jellyfin_total_count: js.total };
         setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: js, error: null } }));
       }
-      const ns = res.data.navidrome_sync;
+      const ns = data.navidrome_sync;
       if (ns) {
         mediaUpdate = { ...mediaUpdate, navidrome_matched_count: ns.matched, navidrome_total_count: ns.total };
         setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ns, error: null } }));
       }
 
-      setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
+      setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: data, error: null } }));
       setPlaylists(prev => prev.map(p =>
         p.id === pl.id
           ? { ...p, last_refreshed_at: new Date().toISOString(), ...mediaUpdate }
           : p
       ));
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Refresh failed.';
+      const msg = err.response?.data?.detail || err.message || 'Refresh failed.';
       setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: msg } }));
     }
   };

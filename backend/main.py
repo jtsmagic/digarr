@@ -1521,9 +1521,10 @@ async def rename_playlist_route(playlist_id: int, req: RenamePlaylistRequest):
     return {"ok": True, "name": new_name}
 
 _refresh_locks: dict[int, asyncio.Lock] = {}
+_refresh_jobs: dict[int, dict] = {}  # playlist_id -> {job_id, status, result, error}
 
 async def _do_refresh_playlist(playlist_id: int) -> dict:
-    """Shared refresh logic used by the API endpoint and the scheduler."""
+    """Shared refresh logic used by the scheduler (runs inline, caller handles locking)."""
     # In-process guard (fast path for same-process concurrent calls)
     if playlist_id not in _refresh_locks:
         _refresh_locks[playlist_id] = asyncio.Lock()
@@ -1537,6 +1538,14 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
             return await _do_refresh_playlist_inner(playlist_id)
         finally:
             clear_refresh_lock(playlist_id)
+
+async def _run_refresh_job(playlist_id: int, job_id: str) -> None:
+    """Background task wrapper — runs refresh and stores result in _refresh_jobs."""
+    try:
+        result = await _do_refresh_playlist(playlist_id)
+        _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "done", "result": result, "error": None}
+    except Exception as exc:
+        _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "error", "result": None, "error": str(exc)}
 
 async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     config = load_config()
@@ -1873,10 +1882,22 @@ async def refresh_playlist(playlist_id: int):
         raise HTTPException(status_code=404, detail="Playlist not found")
     if not pl.get("source_url") or pl.get("source_type") not in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify"):
         raise HTTPException(status_code=400, detail="This playlist has no refreshable source URL.")
-    try:
-        return await _do_refresh_playlist(playlist_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    existing = _refresh_jobs.get(playlist_id)
+    if existing and existing["status"] == "running":
+        return {"job_id": existing["job_id"], "status": "running"}
+    job_id = str(uuid.uuid4())
+    _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "running", "result": None, "error": None}
+    asyncio.create_task(_run_refresh_job(playlist_id, job_id))
+    return {"job_id": job_id, "status": "running"}
+
+@app.get("/api/playlists/{playlist_id}/refresh/status")
+async def refresh_playlist_status(playlist_id: int):
+    job = _refresh_jobs.get(playlist_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="No refresh job found for this playlist")
+    if job["status"] == "error":
+        raise HTTPException(status_code=400, detail=job["error"])
+    return job
 
 @app.get("/api/playlists/{playlist_id}/m3u")
 def download_m3u(playlist_id: int):
