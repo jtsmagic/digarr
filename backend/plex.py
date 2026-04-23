@@ -46,7 +46,7 @@ class PlexClient:
         sections = r.json().get('MediaContainer', {}).get('Directory', [])
         return [{"id": str(s['key']), "title": s['title'], "type": s['type']} for s in sections]
 
-    async def search_track(self, artist: str, title: str) -> Optional[str]:
+    async def search_track(self, artist: str, title: str, album: str = "") -> Optional[str]:
         """Search Plex music library for a track. Returns ratingKey or None."""
         if not title:
             return None
@@ -77,7 +77,8 @@ class PlexClient:
                 r.raise_for_status()
                 return r.json().get('MediaContainer', {}).get('Metadata', [])
 
-        def _best_match(candidates: list, query_norm: str) -> Optional[str]:
+        def _best_match(candidates: list, query_norm: str, album: str = "") -> Optional[str]:
+            album_norm = _normalize(album) if album else ""
             # Exact title + exact artist (punctuation-normalized)
             for t in candidates:
                 if (_normalize(t.get('title', '')) == query_norm and
@@ -89,7 +90,13 @@ class PlexClient:
                 if (query_norm in _normalize(t.get('title', '')) and
                         artist_norm in _normalize(t.get('grandparentTitle', ''))):
                     return t['ratingKey']
-            # Exact title only (any artist)
+            # Exact title + album matches (handles cast recordings where artist name differs)
+            if album_norm:
+                for t in candidates:
+                    if (_normalize(t.get('title', '')) == query_norm and
+                            album_norm in _normalize(t.get('parentTitle', ''))):
+                        return t['ratingKey']
+            # Exact title only (any artist) — last resort
             for t in candidates:
                 if _normalize(t.get('title', '')) == query_norm:
                     return t['ratingKey']
@@ -117,7 +124,7 @@ class PlexClient:
             variant_norm = _normalize(variant)
             tracks = await _hubs_search(variant)
             logger.debug("Plex /hubs/search query=%r artist=%r → %d result(s)", variant, artist, len(tracks))
-            key = _best_match(tracks, variant_norm)
+            key = _best_match(tracks, variant_norm, album)
             if key:
                 return key
 
@@ -127,7 +134,7 @@ class PlexClient:
             clean_query = ' '.join(clean_words)
             tracks = await _filter_endpoint(clean_query)
             logger.debug("Plex /all title=%r → %d result(s)", clean_query, len(tracks))
-            key = _best_match(tracks, _normalize(title))
+            key = _best_match(tracks, _normalize(title), album)
             if key:
                 return key
 
@@ -146,6 +153,7 @@ class PlexClient:
                     return await self.search_track(
                         track.get('artist', ''),
                         track.get('title', ''),
+                        track.get('album', ''),
                     )
                 except Exception as exc:
                     logger.warning("Plex search error for %r / %r: %s", track.get('artist'), track.get('title'), exc)
