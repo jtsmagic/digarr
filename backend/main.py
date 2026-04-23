@@ -1890,6 +1890,11 @@ async def refresh_playlist(playlist_id: int):
     asyncio.create_task(_run_refresh_job(playlist_id, job_id))
     return {"job_id": job_id, "status": "running"}
 
+@app.get("/api/playlists/refresh/running")
+async def get_running_refreshes():
+    """Returns playlist IDs that currently have a running refresh job."""
+    return {"running": [pid for pid, job in _refresh_jobs.items() if job["status"] == "running"]}
+
 @app.get("/api/playlists/{playlist_id}/refresh/status")
 async def refresh_playlist_status(playlist_id: int):
     job = _refresh_jobs.get(playlist_id)
