@@ -96,11 +96,6 @@ class PlexClient:
                     if (_normalize(t.get('title', '')) == query_norm and
                             album_norm in _normalize(t.get('parentTitle', ''))):
                         return t['ratingKey']
-            # Any-artist fallback — only for titles long enough to be distinctive
-            if len(query_norm) >= 15:
-                for t in candidates:
-                    if _normalize(t.get('title', '')) == query_norm:
-                        return t['ratingKey']
             return None
 
         def _title_variants(t: str) -> list:
