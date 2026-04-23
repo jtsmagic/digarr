@@ -88,6 +88,18 @@ export default function History() {
       setPlaylists(r.data.playlists);
       setLoading(false);
     }).catch(() => setLoading(false));
+    // Restore loading state for any refreshes that were running before page load
+    axios.get('/api/playlists/refresh/running').then(r => {
+      const running = r.data.running || [];
+      if (running.length) {
+        setRefreshStates(prev => {
+          const next = { ...prev };
+          running.forEach(id => { next[id] = { loading: true, result: null, error: null }; });
+          return next;
+        });
+        running.forEach(id => pollRefreshJob(id));
+      }
+    }).catch(() => {});
     axios.get('/api/import/jobs').then(r => setImportJobs((r.data.jobs || []).filter(j => !dismissedJobIds.current.has(j.id)))).catch(() => {});
     axios.get('/api/library/ignored-tracks').then(r => {
       const keys = new Set((r.data.ignored || []).map(t => `${t.artist.toLowerCase()}||${t.title.toLowerCase()}`));
@@ -316,6 +328,40 @@ const handlePushToSpotify = async (pl) => {
     }
   };
 
+  const pollRefreshJob = (playlistId, plRef) => {
+    const poll = async () => {
+      try {
+        const res = await axios.get(`/api/playlists/${playlistId}/refresh/status`);
+        if (res.data.status === 'running') { setTimeout(poll, 2000); return; }
+        if (res.data.status === 'error') throw new Error(res.data.error || 'Refresh failed.');
+        const data = res.data.result;
+        const pl = plRef || playlists.find(p => p.id === playlistId) || { id: playlistId };
+        let mediaUpdate = {};
+        const ps = data.plex_sync;
+        if (ps) {
+          mediaUpdate = { ...mediaUpdate, plex_playlist_id: ps.plex_playlist_id ?? pl.plex_playlist_id, plex_matched_count: ps.matched, plex_total_count: ps.total, plex_unmatched_tracks: ps.unmatched ?? [] };
+          setSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: ps, error: null } }));
+        }
+        const js = data.jellyfin_sync;
+        if (js) {
+          mediaUpdate = { ...mediaUpdate, jellyfin_matched_count: js.matched, jellyfin_total_count: js.total };
+          setJellyfinSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: js, error: null } }));
+        }
+        const ns = data.navidrome_sync;
+        if (ns) {
+          mediaUpdate = { ...mediaUpdate, navidrome_matched_count: ns.matched, navidrome_total_count: ns.total };
+          setNavidromeSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: ns, error: null } }));
+        }
+        setRefreshStates(prev => ({ ...prev, [playlistId]: { loading: false, result: data, error: null } }));
+        setPlaylists(prev => prev.map(p => p.id === playlistId ? { ...p, last_refreshed_at: new Date().toISOString(), ...mediaUpdate } : p));
+      } catch (err) {
+        const msg = err.response?.data?.detail || err.message || 'Refresh failed.';
+        setRefreshStates(prev => ({ ...prev, [playlistId]: { loading: false, result: null, error: msg } }));
+      }
+    };
+    poll();
+  };
+
   const handleRefresh = async (e, pl) => {
     e.stopPropagation();
     if (confirmRefresh !== pl.id) {
@@ -325,54 +371,8 @@ const handlePushToSpotify = async (pl) => {
     setConfirmRefresh(null);
     setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
     try {
-      const startRes = await axios.post(`/api/playlists/${pl.id}/refresh`);
-      const jobId = startRes.data.job_id;
-
-      // Poll until done
-      const data = await new Promise((resolve, reject) => {
-        const poll = async () => {
-          try {
-            const res = await axios.get(`/api/playlists/${pl.id}/refresh/status`);
-            if (res.data.status === 'done') return resolve(res.data.result);
-            if (res.data.status === 'error') return reject(new Error(res.data.error || 'Refresh failed.'));
-            setTimeout(poll, 2000);
-          } catch (err) {
-            reject(err);
-          }
-        };
-        poll();
-      });
-
-      // Use the backend's auto-sync results if they fired (only fires when matched count grew)
-      let mediaUpdate = {};
-      const ps = data.plex_sync;
-      if (ps) {
-        mediaUpdate = {
-          ...mediaUpdate,
-          plex_playlist_id: ps.plex_playlist_id ?? pl.plex_playlist_id,
-          plex_matched_count: ps.matched,
-          plex_total_count: ps.total,
-          plex_unmatched_tracks: ps.unmatched ?? [],
-        };
-        setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ps, error: null } }));
-      }
-      const js = data.jellyfin_sync;
-      if (js) {
-        mediaUpdate = { ...mediaUpdate, jellyfin_matched_count: js.matched, jellyfin_total_count: js.total };
-        setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: js, error: null } }));
-      }
-      const ns = data.navidrome_sync;
-      if (ns) {
-        mediaUpdate = { ...mediaUpdate, navidrome_matched_count: ns.matched, navidrome_total_count: ns.total };
-        setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: ns, error: null } }));
-      }
-
-      setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: data, error: null } }));
-      setPlaylists(prev => prev.map(p =>
-        p.id === pl.id
-          ? { ...p, last_refreshed_at: new Date().toISOString(), ...mediaUpdate }
-          : p
-      ));
+      await axios.post(`/api/playlists/${pl.id}/refresh`);
+      pollRefreshJob(pl.id, pl);
     } catch (err) {
       const msg = err.response?.data?.detail || err.message || 'Refresh failed.';
       setRefreshStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: msg } }));
