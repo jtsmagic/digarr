@@ -96,10 +96,6 @@ class PlexClient:
                     if (_normalize(t.get('title', '')) == query_norm and
                             album_norm in _normalize(t.get('parentTitle', ''))):
                         return t['ratingKey']
-            # Exact title only (any artist) — last resort
-            for t in candidates:
-                if _normalize(t.get('title', '')) == query_norm:
-                    return t['ratingKey']
             return None
 
         def _title_variants(t: str) -> list:
