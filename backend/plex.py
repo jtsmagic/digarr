@@ -3,19 +3,9 @@ import httpx
 import asyncio
 import logging
 from typing import List, Optional, Tuple
-from utils import normalize as _normalize
+from utils import normalize as _normalize, is_cast_context as _is_cast_context, cast_score as _cast_score
 
 logger = logging.getLogger(__name__)
-
-_CAST_KEYWORDS = {"broadway", "cast", "musical", "soundtrack", "original cast", "recording", "score", "theatre", "theater", "west end"}
-
-def _is_cast_context(name: str) -> bool:
-    n = (name or "").lower()
-    return any(kw in n for kw in _CAST_KEYWORDS)
-
-def _cast_score(name: str) -> int:
-    n = (name or "").lower()
-    return sum(1 for kw in _CAST_KEYWORDS if kw in n)
 
 
 class PlexClient:
@@ -106,9 +96,11 @@ class PlexClient:
                     if (_normalize(t.get('title', '')) == query_norm and
                             album_norm in _normalize(t.get('parentTitle', ''))):
                         return t['ratingKey']
-            # Any-artist fallback — skip short titles that commonly collide across artists
-            # (e.g. "I Believe", "Proud Mary" = 8-9 chars stripped; "Defying Gravity" = 14)
-            if len(query_norm.replace(" ", "")) >= 12:
+            # Any-artist fallback — skip short titles that commonly collide across artists.
+            # Cast playlists use a lower threshold (6) since short unambiguous titles like
+            # "Memory" or "Tomorrow" are worth attempting when we can prefer cast recordings.
+            min_chars = 6 if _is_cast_context(playlist_name) else 12
+            if len(query_norm.replace(" ", "")) >= min_chars:
                 title_matches = [t for t in candidates if _normalize(t.get('title', '')) == query_norm]
                 if title_matches:
                     if _is_cast_context(playlist_name):

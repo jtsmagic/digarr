@@ -3,20 +3,9 @@ import asyncio
 import logging
 import httpx
 from typing import Optional
-from utils import normalize as _normalize
+from utils import normalize as _normalize, is_cast_context as _is_cast_playlist, cast_score as _cast_score
 
 logger = logging.getLogger(__name__)
-
-_CAST_KEYWORDS = {"broadway", "cast", "musical", "soundtrack", "original cast", "recording", "score", "theatre", "theater", "west end"}
-
-def _is_cast_playlist(playlist_name: str) -> bool:
-    name_lower = (playlist_name or "").lower()
-    return any(kw in name_lower for kw in _CAST_KEYWORDS)
-
-def _cast_score(artist_name: str) -> int:
-    """Higher = more likely to be a cast recording / musical artist."""
-    name_lower = (artist_name or "").lower()
-    return sum(1 for kw in _CAST_KEYWORDS if kw in name_lower)
 
 
 class LidarrClient:
