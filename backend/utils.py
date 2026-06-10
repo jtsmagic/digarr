@@ -1,5 +1,23 @@
 import re
 
+# Keywords indicating a cast recording / musical / soundtrack context.
+# 'cast' is matched as a whole word to avoid 'podcast'/'broadcast'.
+# Generic words like 'recording' and 'score' are intentionally excluded.
+_CAST_KEYWORDS = frozenset({"broadway", "musical", "soundtrack", "original cast", "theatre", "theater", "west end"})
+_CAST_WORD_RE = re.compile(r'\bcast\b')
+
+
+def is_cast_context(name: str) -> bool:
+    """Return True if name suggests a cast recording / musical / soundtrack."""
+    n = (name or "").lower()
+    return bool(_CAST_WORD_RE.search(n)) or any(kw in n for kw in _CAST_KEYWORDS)
+
+
+def cast_score(name: str) -> int:
+    """Count how many cast/musical keywords appear in name (higher = more likely cast)."""
+    n = (name or "").lower()
+    return int(bool(_CAST_WORD_RE.search(n))) + sum(1 for kw in _CAST_KEYWORDS if kw in n)
+
 
 def normalize(s: str) -> str:
     """Lowercase, strip leading 'the ', remove punctuation for fuzzy matching."""

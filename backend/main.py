@@ -644,7 +644,7 @@ async def _plex_sync_all_job() -> dict:
             full = get_playlist(pl["id"])
             if not full or not full.get("tracks"):
                 continue
-            matched_keys, unmatched, total = await plex_client.match_tracks(full["tracks"])
+            matched_keys, unmatched, total = await plex_client.match_tracks(full["tracks"], playlist_name=pl.get("name", ""))
             current_matched = pl.get("plex_matched_count") or 0
             if len(matched_keys) <= current_matched:
                 continue  # nothing new — skip
@@ -796,7 +796,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
         try:
             pc = PlexClient(config["plex_url"], config["plex_token"],
                             config["plex_library_section_id"])
-            matched_keys, unmatched, total = await pc.match_tracks(req.tracks)
+            matched_keys, unmatched, total = await pc.match_tracks(req.tracks, playlist_name=job["playlist_name"])
             if matched_keys:
                 plex_name = _plex_playlist_name(job["playlist_name"], config)
                 plex_id = await pc.create_playlist(plex_name, matched_keys)
@@ -2079,7 +2079,7 @@ async def push_to_plex(req: PlexPlaylistRequest):
         config["plex_library_section_id"],
     )
 
-    matched_keys, unmatched, total = await client.match_tracks(req.tracks)
+    matched_keys, unmatched, total = await client.match_tracks(req.tracks, playlist_name=req.playlist_name)
 
     config = load_config()
     plex_playlist_id = None
@@ -2853,7 +2853,7 @@ async def _rematch_playlist_plex(playlist_id: int) -> None:
         return
     try:
         plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
-        matched_keys, unmatched, total = await plex_client.match_tracks(tracks)
+        matched_keys, unmatched, total = await plex_client.match_tracks(tracks, playlist_name=pl.get("name", ""))
         current_matched = pl.get("plex_matched_count") or 0
         if len(matched_keys) > current_matched:
             logger.info("Lidarr webhook: playlist %d gained %d new Plex matches", playlist_id, len(matched_keys) - current_matched)
