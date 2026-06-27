@@ -2,7 +2,7 @@
 
 **The crates don't fill themselves.**
 
-Digarr is a self-hosted web app that imports artists and playlists using AI to parse any source — blog posts, Reddit threads, M3U files, URLs, raw text lists, and more. It feeds [Lidarr](https://lidarr.audio), [Deemix](https://deemix.app), and [slskd](https://github.com/slskd/slskd) (Soulseek) automatically — all three are optional.
+Digarr is a self-hosted web app that imports artists and playlists using AI to parse any source — blog posts, Reddit threads, M3U files, URLs, raw text lists, and more. It feeds [Lidarr](https://lidarr.audio) and [Deemix](https://deemix.app) automatically — both are optional.
 
 ![Digarr](https://img.shields.io/badge/arr-ecosystem-orange?style=flat-square) ![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
@@ -16,7 +16,6 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 - **AI-powered extraction** — Claude or OpenAI identifies artists and tracks from unstructured content; confidence scores dim low-confidence results so you can review before adding
 - **Lidarr integration** — search, check library, and add artists in one click; fully optional
 - **Deemix integration** — automatically queue every playlist track to Deezer/downloads via a self-hosted Deemix instance during import
-- **Soulseek integration** — search the Soulseek P2P network via slskd; candidates are scored against MusicBrainz metadata (title, artist, format, duration); high-confidence matches auto-queue, low-confidence tracks are flagged for manual review in the History panel
 - **Track status** — see which tracks are downloaded (green/yellow/red) vs missing
 - **Manual track matching** — search your Plex, Jellyfin, or Navidrome library cache for unmatched tracks and confirm the right match; matches persist across refreshes
 - **M3U / JSPF export** — download parsed playlists as M3U or JSON (JSPF) files
@@ -43,7 +42,7 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 ### Requirements
 - Docker + Docker Compose
 - Anthropic API key ([get one here](https://console.anthropic.com)) — or OpenAI key
-- Everything else (Lidarr, Deemix, slskd, Plex, Jellyfin, Navidrome, Spotify) is optional
+- Everything else (Lidarr, Deemix, Plex, Jellyfin, Navidrome, Spotify) is optional
 
 ### Run with Docker Compose
 
@@ -79,16 +78,6 @@ Any parsed playlist can be downloaded as an M3U or JSPF file for use in other pl
 
 ### Deemix (automatic Deezer queueing)
 Connect a self-hosted [Deemix](https://deemix.app) instance in **Settings → Deemix**. When enabled and selected as a sync target, every track in the playlist is searched on Deezer and queued for download automatically during import — no manual steps needed.
-
-### Soulseek (slskd)
-Connect a self-hosted [slskd](https://github.com/slskd/slskd) instance in **Settings → Soulseek**. During import, Digarr searches the Soulseek P2P network for each track and scores candidates using:
-
-- **Title match** (40%) — filename similarity
-- **Artist match** (25%) — path/folder match
-- **Format/quality** (15%) — FLAC > MP3/M4A > OGG/Opus
-- **Duration match** (20%) — compared against MusicBrainz canonical length
-
-Matches at or above the configurable threshold (default 85%) are queued automatically. Below-threshold tracks are **flagged for manual review** — open any playlist in History to see the candidates, scores, and queue the right one with one click.
 
 ---
 
@@ -132,9 +121,6 @@ All config is stored in the Settings UI and persisted to `/data/config.json` ins
 | Discogs Username | Your Discogs username — required for Wantlist import on the Discover page |
 | Discogs Token | Your Discogs personal access token — generate one in Discogs → Settings → Developer |
 | Deemix URL | Your self-hosted Deemix instance URL (e.g. `http://192.168.1.x:6595`) — enables automatic Deezer queueing on import |
-| slskd URL | Your self-hosted slskd instance URL (e.g. `http://192.168.1.x:5030`) — enables Soulseek P2P download search on import |
-| slskd API Key | Found in slskd → Settings → API Keys |
-| Confidence Threshold | Minimum score (50–99%) for auto-queuing a Soulseek match; below-threshold tracks are flagged for manual review (default 85%) |
 | Refresh Interval | How often to auto-refresh all playlists (off / 1h–bi-weekly) |
 | Webhook URL | Optional URL to POST a JSON summary after every scheduled refresh run |
 | Refresh Merge Tracks | When enabled, refreshes append new tracks instead of replacing the stored list |

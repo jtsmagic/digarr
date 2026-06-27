@@ -184,10 +184,6 @@ def init_db():
         ("navidrome_total_count", "INTEGER"),
         ("deemix_queued_count", "INTEGER"),
         ("deemix_total_count", "INTEGER"),
-        ("slskd_queued_count", "INTEGER"),
-        ("slskd_flagged_count", "INTEGER"),
-        ("slskd_total_count", "INTEGER"),
-        ("slskd_flagged_tracks", "TEXT"),
         ("last_refresh_new_artists", "TEXT"),
         ("refresh_started_at", "TEXT"),
     ]:
@@ -328,7 +324,6 @@ def get_playlists() -> list:
                         jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
                         navidrome_playlist_id, navidrome_matched_count, navidrome_total_count,
                         deemix_queued_count, deemix_total_count,
-                        slskd_queued_count, slskd_flagged_count, slskd_total_count,
                         last_refresh_new_artists
                  FROM playlists ORDER BY created_at DESC""")
     rows = c.fetchall()
@@ -908,24 +903,6 @@ def update_playlist_deemix_result(
     c.execute(
         "UPDATE playlists SET deemix_queued_count = ?, deemix_total_count = ? WHERE id = ?",
         (queued_count, total_count, playlist_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-def update_playlist_slskd_result(
-    playlist_id: int,
-    queued_count: int,
-    flagged_count: int,
-    total_count: int,
-    flagged_tracks: list,
-) -> None:
-    conn = get_db()
-    c = conn.cursor()
-    c.execute(
-        """UPDATE playlists SET slskd_queued_count = ?, slskd_flagged_count = ?,
-           slskd_total_count = ?, slskd_flagged_tracks = ? WHERE id = ?""",
-        (queued_count, flagged_count, total_count, json.dumps(flagged_tracks), playlist_id),
     )
     conn.commit()
     conn.close()
