@@ -680,7 +680,7 @@ const handlePushToSpotify = async (pl) => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: isDone ? 'var(--green)' : isError ? 'var(--red)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {isDone
-                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · Plex: ${job.plex_result.matched}/${job.plex_result.total}` : ''}${job.jellyfin_result ? ` · Jellyfin: ${job.jellyfin_result.matched}/${job.jellyfin_result.total}` : ''}${job.navidrome_result ? ` · Navidrome: ${job.navidrome_result.matched}/${job.navidrome_result.total}` : ''}${job.deemix_result ? ` · Deemix: ${job.deemix_result.queued}/${job.deemix_result.total}` : ''}${job.slskd_result ? ` · Soulseek: ${job.slskd_result.queued} queued${job.slskd_result.flagged > 0 ? ` · ${job.slskd_result.flagged} flagged` : ''}` : ''}`
+                        ? `✓ ${added} new artist${added !== 1 ? 's' : ''}${errors > 0 ? ` · ${errors} failed` : ''}${job.plex_result ? ` · Plex: ${job.plex_result.matched}/${job.plex_result.total}` : ''}${job.jellyfin_result ? ` · Jellyfin: ${job.jellyfin_result.matched}/${job.jellyfin_result.total}` : ''}${job.navidrome_result ? ` · Navidrome: ${job.navidrome_result.matched}/${job.navidrome_result.total}` : ''}${job.deemix_result ? ` · Deemix: ${job.deemix_result.queued}/${job.deemix_result.total}` : ''}`
                         : isError ? `Error: ${job.error}`
                         : job.status === 'queued' ? 'Queued…'
                         : `${job.current}/${job.total}${job.current_artist ? `: ${job.current_artist}` : ''}`}
