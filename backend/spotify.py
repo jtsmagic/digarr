@@ -1,10 +1,13 @@
 import asyncio
 import base64
 import hashlib
+import logging
 import re
 import secrets
 import httpx
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 PLAYLIST_RE = re.compile(r"open\.spotify\.com/playlist/([A-Za-z0-9]+)")
 
@@ -116,13 +119,29 @@ async def get_oauth_token(config: dict) -> str | None:
     from config import save_config  # avoid circular at module level
     try:
         new_data = await _do_refresh(client_id, refresh_token)
-    except httpx.HTTPStatusError:
-        # Refresh token is invalid/revoked — clear it so the UI prompts reconnect
-        save_config({
-            "spotify_access_token": "",
-            "spotify_refresh_token": "",
-            "spotify_token_expires_at": "",
-        })
+    except httpx.HTTPStatusError as exc:
+        # Only a genuine invalid_grant means the refresh token is expired/revoked —
+        # discard it so the UI prompts reconnect. Transient failures (5xx, 429, etc.)
+        # must NOT wipe the token; keep it and let the next call retry.
+        error = ""
+        try:
+            error = (exc.response.json() or {}).get("error", "")
+        except Exception:
+            pass
+        if exc.response.status_code == 400 and error == "invalid_grant":
+            logger.warning("Spotify refresh token expired/revoked (invalid_grant) — clearing; user must reconnect")
+            save_config({
+                "spotify_access_token": "",
+                "spotify_refresh_token": "",
+                "spotify_token_expires_at": "",
+            })
+        else:
+            logger.warning("Spotify token refresh failed transiently (HTTP %s) — keeping token, will retry",
+                           exc.response.status_code)
+        return None
+    except httpx.RequestError as exc:
+        # Network-level error (timeout/connection) — transient, keep the token and retry later.
+        logger.warning("Spotify token refresh network error — keeping token, will retry: %s", exc)
         return None
     save_config(new_data)
     return new_data["spotify_access_token"]
