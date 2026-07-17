@@ -3,6 +3,8 @@ import asyncio
 import json
 import re
 
+from ai.errors import AIProviderError, friendly_status_message
+
 SYSTEM_PROMPT = """You are a music data extraction assistant for Digarr, a tool that imports music into Lidarr.
 
 Your job is to analyze any text content — web pages, blog posts, Reddit threads, playlist descriptions,
@@ -42,18 +44,23 @@ class ClaudeProvider:
         # Truncate very long content
         truncated = content[:15000] if len(content) > 15000 else content
 
-        message = await asyncio.to_thread(
-            self.client.messages.create,
-            model=self.model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Extract all artists and tracks from this content:\n\n{truncated}"
-                }
-            ]
-        )
+        try:
+            message = await asyncio.to_thread(
+                self.client.messages.create,
+                model=self.model,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Extract all artists and tracks from this content:\n\n{truncated}"
+                    }
+                ]
+            )
+        except anthropic.APIStatusError as e:
+            raise AIProviderError("Claude", friendly_status_message(e.status_code, e.message)) from e
+        except anthropic.APIConnectionError as e:
+            raise AIProviderError("Claude", f"Could not reach the Anthropic API: {e}") from e
 
         response_text = message.content[0].text.strip()
 

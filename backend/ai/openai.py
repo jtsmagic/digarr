@@ -1,9 +1,10 @@
 import asyncio
 import json
 import re
-from openai import OpenAI
+from openai import OpenAI, APIStatusError, APIConnectionError
 
 from ai.claude import SYSTEM_PROMPT
+from ai.errors import AIProviderError, friendly_status_message
 
 
 class OpenAIProvider:
@@ -14,16 +15,21 @@ class OpenAIProvider:
     async def extract_artists_and_tracks(self, content: str) -> dict:
         truncated = content[:15000] if len(content) > 15000 else content
 
-        response = await asyncio.to_thread(
-            self.client.chat.completions.create,
-            model=self.model,
-            max_tokens=4096,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Extract all artists and tracks from this content:\n\n{truncated}"},
-            ],
-        )
+        try:
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.model,
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Extract all artists and tracks from this content:\n\n{truncated}"},
+                ],
+            )
+        except APIStatusError as e:
+            raise AIProviderError("OpenAI", friendly_status_message(e.status_code, e.message)) from e
+        except APIConnectionError as e:
+            raise AIProviderError("OpenAI", f"Could not reach the OpenAI API: {e}") from e
 
         response_text = response.choices[0].message.content.strip()
 

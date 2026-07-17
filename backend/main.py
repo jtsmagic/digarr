@@ -70,6 +70,7 @@ from download_client import LidarrDownloadClient
 from deemix import DeemixClient
 from ai.claude import ClaudeProvider
 from ai.openai import OpenAIProvider
+from ai.errors import AIProviderError
 
 
 def make_ai_provider(config: dict):
@@ -1139,7 +1140,10 @@ async def parse_input(request: Request, req: ParseRequest):
         ai = make_ai_provider(config)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    result = await ai.extract_artists_and_tracks(content)
+    try:
+        result = await ai.extract_artists_and_tracks(content)
+    except AIProviderError as e:
+        raise HTTPException(status_code=502, detail=f"{e.provider} error: {e}")
     # Deduplicate artists by name (AI may return duplicates despite instructions)
     result["artists"] = deduplicate_artists(result.get("artists", []))
     result["playlist_name"] = req.playlist_name
