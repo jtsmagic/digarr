@@ -7,11 +7,15 @@ so the actual business logic lives here exactly once.
 
 Reuses main.py's functions directly — no HTTP calls between this process and
 the main app. Reads (playlists, config, library cache) go straight to the
-shared SQLite DB / config.json on disk. Actions (import, refresh, sync) call
-the same async functions the web UI's routes call, awaited synchronously
-instead of fired off as a background job, since there is no long-lived
-process here to poll.
+shared SQLite DB / config.json on disk. Most actions (refresh, sync) call the
+same async functions the web UI's routes call, awaited synchronously and
+returned in one response. import_playlist is the exception: adding many new
+artists to Lidarr is sequential and can take minutes, which is long enough to
+trip client/proxy timeouts over the remote MCP transport, so it's fired off
+as a background task (like the web UI's /api/import/start) and paired with
+get_import_status for polling.
 """
+import asyncio
 from typing import Optional
 
 from fastapi import HTTPException
@@ -147,6 +151,11 @@ async def import_playlist(
     playlist to any configured media servers (Plex/Jellyfin/Navidrome) and Spotify/Deemix
     if enabled. Call parse_source first to get the artists/tracks lists to pass in here.
 
+    Runs in the background and returns immediately with a job_id — adding artists to
+    Lidarr is sequential and can take several minutes for playlists with many new
+    artists. Poll get_import_status(job_id) until status is "done" or "error" to see
+    the final results.
+
     sync_targets restricts which media servers to push to (e.g. ["plex"]); omit for
     every configured target.
     """
@@ -173,8 +182,18 @@ async def import_playlist(
     job["playlist_id"] = playlist_id
     digarr._jobs[job["id"]] = job
     digarr.db_save_import_job(job)
-    await digarr._run_import_job(job["id"], req, playlist_id)
-    return digarr._jobs[job["id"]]
+    asyncio.create_task(digarr._run_import_job(job["id"], req, playlist_id))
+    return job
+
+
+def get_import_status(job_id: str) -> dict:
+    """Poll a background import job started by import_playlist. status is "running",
+    "done", or "error"; once done, includes per-artist Lidarr results and media-server
+    sync results."""
+    job = digarr._jobs.get(job_id)
+    if not job:
+        raise ValueError(f"Import job {job_id} not found")
+    return job
 
 
 async def refresh_playlist(playlist_id: int) -> dict:
@@ -223,6 +242,7 @@ ALL_TOOLS = [
     get_playlist,
     parse_source,
     import_playlist,
+    get_import_status,
     refresh_playlist,
     sync_playlist,
     sync_all,
