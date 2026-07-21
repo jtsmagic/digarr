@@ -67,7 +67,14 @@ class OIDCTokenVerifier(TokenVerifier):
                 options={"verify_aud": self._audience is not None},
             )
         except jwt.PyJWTError as e:
-            logger.warning("verify_token: rejected — %r (expected issuer=%s)", e, self._issuer)
+            try:
+                unverified = jwt.decode(token, options={"verify_signature": False})
+                logger.warning(
+                    "verify_token: rejected — %r (expected issuer=%r, token iss=%r aud=%r)",
+                    e, self._issuer, unverified.get("iss"), unverified.get("aud"),
+                )
+            except Exception:
+                logger.warning("verify_token: rejected — %r (expected issuer=%r)", e, self._issuer)
             return None
 
         scopes = claims.get("scope", "")

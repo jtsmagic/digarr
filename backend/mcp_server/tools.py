@@ -187,12 +187,57 @@ async def import_playlist(
 
 
 def get_import_status(job_id: str) -> dict:
-    """Poll a background import job started by import_playlist. status is "running",
-    "done", or "error"; once done, includes per-artist Lidarr results and media-server
-    sync results."""
+    """Poll a background import job started by import_playlist or replace_playlist.
+    status is "running", "done", or "error"; once done, includes per-artist Lidarr
+    results and media-server sync results."""
     job = digarr._jobs.get(job_id)
     if not job:
         raise ValueError(f"Import job {job_id} not found")
+    return job
+
+
+async def replace_playlist(
+    playlist_id: int,
+    artists: list[dict],
+    tracks: list[dict],
+    sync_targets: Optional[list[str]] = None,
+) -> dict:
+    """
+    Overwrite an EXISTING playlist's artist and track list with fresh data — use this
+    instead of import_playlist when you're re-pulling a playlist you already imported
+    (e.g. re-scraping its source page yourself) and want to update it in place rather
+    than create a duplicate. Find the playlist_id first via list_playlists/get_playlist.
+
+    The playlist's artists/tracks become exactly what you pass in here — anything
+    missing from the new list is dropped from the playlist (artists already added to
+    Lidarr by a prior import are never removed from Lidarr itself, just no longer
+    tracked by this playlist). New artists in the list get added to Lidarr, and the
+    playlist is re-pushed to sync_targets (or every configured target if omitted).
+
+    Runs in the background and returns immediately with a job_id, same as
+    import_playlist — poll get_import_status(job_id) for progress/results.
+    """
+    pl = digarr.get_playlist(playlist_id)
+    if not pl:
+        raise ValueError(f"Playlist {playlist_id} not found")
+
+    req = digarr.ImportJobRequest(
+        artists=artists,
+        tracks=tracks,
+        playlist_name=pl["name"],
+        source_url=pl.get("source_url"),
+        source_type=pl.get("source_type"),
+        include_in_refresh=True,
+        sync_targets=sync_targets or [],
+    )
+    artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
+    digarr.update_playlist(playlist_id, artist_names, req.tracks, pl.get("artists_added") or [])
+
+    job = digarr._new_job(pl["name"], len(req.artists))
+    job["playlist_id"] = playlist_id
+    digarr._jobs[job["id"]] = job
+    digarr.db_save_import_job(job)
+    asyncio.create_task(digarr._run_import_job(job["id"], req, playlist_id))
     return job
 
 
@@ -243,6 +288,7 @@ ALL_TOOLS = [
     parse_source,
     import_playlist,
     get_import_status,
+    replace_playlist,
     refresh_playlist,
     sync_playlist,
     sync_all,
