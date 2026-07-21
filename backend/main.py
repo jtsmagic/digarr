@@ -613,8 +613,14 @@ async def _refresh_all_playlists_job() -> dict:
             msg = str(e) or type(e).__name__
             summary.append({"name": pl["name"], "status": "error", "error": msg})
             logger.error("Scheduler: error refreshing '%s': %s", pl['name'], msg)
-    last_run = datetime.utcnow().isoformat()
-    save_config({**config, "refresh_last_run": last_run, "refresh_last_run_summary": summary})
+    all_failed = bool(summary) and all(e["status"] == "error" for e in summary)
+    if all_failed:
+        last_run = config.get("refresh_last_run")
+        save_config({**config, "refresh_last_run_summary": summary})
+        logger.warning("Scheduler: all %s playlist(s) failed to refresh — not advancing last_run", len(summary))
+    else:
+        last_run = datetime.utcnow().isoformat()
+        save_config({**config, "refresh_last_run": last_run, "refresh_last_run_summary": summary})
     db_increment_stat("refresh_runs_total")
     db_increment_stat("artists_added_via_refresh_total", total_new_artists)
     webhook_url = config.get("webhook_url", "")
