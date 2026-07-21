@@ -10,3 +10,4 @@ pydantic==2.13.4
 apscheduler==3.10.4
 slowapi==0.1.9
 mcp==1.28.1
+pyjwt[crypto]==2.13.0
