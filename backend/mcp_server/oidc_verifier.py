@@ -8,9 +8,18 @@ Discovers the provider's JWKS endpoint via the standard
 verifies each bearer token's signature, issuer, expiry, and (if configured)
 audience locally — no callback to the identity provider on every request.
 """
+import logging
+
 import httpx
 import jwt
 from mcp.server.auth.provider import AccessToken, TokenVerifier
+
+logger = logging.getLogger("mcp_server.oidc_verifier")
+
+# Some providers sit behind bot-protection (e.g. Cloudflare) that blocks
+# generic HTTP client User-Agents like Python's default urllib/httpx strings.
+# PyJWKClient uses urllib internally, so give it a normal-looking UA.
+_HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Digarr-MCP/1.0)"}
 
 
 def discover_jwks_uri(issuer_url: str) -> str:
@@ -20,7 +29,7 @@ def discover_jwks_uri(issuer_url: str) -> str:
     appending the well-known suffix.
     """
     discovery_url = issuer_url.rstrip("/") + "/.well-known/openid-configuration"
-    resp = httpx.get(discovery_url, timeout=10.0)
+    resp = httpx.get(discovery_url, headers=_HTTP_HEADERS, timeout=10.0)
     resp.raise_for_status()
     jwks_uri = resp.json().get("jwks_uri")
     if not jwks_uri:
@@ -44,7 +53,7 @@ class OIDCTokenVerifier(TokenVerifier):
     def __init__(self, issuer_url: str, jwks_uri: str, audience: str | None = None):
         self._issuer = issuer_url
         self._audience = audience
-        self._jwks_client = jwt.PyJWKClient(jwks_uri)
+        self._jwks_client = jwt.PyJWKClient(jwks_uri, headers=_HTTP_HEADERS)
 
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
@@ -57,7 +66,8 @@ class OIDCTokenVerifier(TokenVerifier):
                 audience=self._audience,
                 options={"verify_aud": self._audience is not None},
             )
-        except jwt.PyJWTError:
+        except jwt.PyJWTError as e:
+            logger.warning("verify_token: rejected — %r (expected issuer=%s)", e, self._issuer)
             return None
 
         scopes = claims.get("scope", "")

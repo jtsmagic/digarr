@@ -35,10 +35,12 @@ Launch (from the container, CWD=/app):
 """
 import os
 import sys
+from urllib.parse import urlparse
 
 import uvicorn
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_server import tools
 from mcp_server.oidc_verifier import OIDCTokenVerifier, discover_jwks_uri
@@ -61,6 +63,12 @@ def main() -> None:
     jwks_uri = discover_jwks_uri(issuer_url)
     verifier = OIDCTokenVerifier(issuer_url=issuer_url, jwks_uri=jwks_uri, audience=client_id)
 
+    # nginx proxies the real public hostname straight through (Host header
+    # preserved) to this internal process, so the SDK's DNS-rebinding
+    # protection needs to know that hostname is expected, not just 127.0.0.1.
+    public_host = urlparse(public_url).netloc
+    public_origin = f"{urlparse(public_url).scheme}://{public_host}"
+
     mcp = FastMCP(
         "digarr",
         stateless_http=True,
@@ -69,6 +77,10 @@ def main() -> None:
             issuer_url=issuer_url,
             resource_server_url=public_url,
             required_scopes=[],
+        ),
+        transport_security=TransportSecuritySettings(
+            allowed_hosts=[public_host],
+            allowed_origins=[public_origin],
         ),
     )
     for fn in tools.ALL_TOOLS:
