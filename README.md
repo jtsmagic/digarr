@@ -31,6 +31,7 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 - **Discover page** — curated feeds from Spotify, ListenBrainz, Similar to Library, and Discogs Wantlist; review recommendations with library status badges and import directly
 - **Wanted/missing report** — see which Lidarr artists added via Digarr still have undownloaded albums
 - **Artist blocklist** — permanently ignore specific artists across all imports and refreshes
+- **MCP server** — control Digarr from Claude Desktop or Claude Code: feed it a link and have it import the playlist, check whether you already have a song/artist, or pull the Lidarr wanted report, all from chat
 - **Authentication** — password login (bcrypt) and/or OIDC SSO (Authentik, Keycloak, etc.); both can be active simultaneously; 30-day sessions
 - **Multi-AI support** — Claude (Haiku/Sonnet/Opus) and OpenAI (GPT-4o mini/GPT-4o), switchable from Settings with per-provider model selection
 - **Clean web UI** — dark, vinyl-inspired interface
@@ -78,6 +79,43 @@ Any parsed playlist can be downloaded as an M3U or JSPF file for use in other pl
 
 ### Deemix (automatic Deezer queueing)
 Connect a self-hosted [Deemix](https://deemix.app) instance in **Settings → Deemix**. When enabled and selected as a sync target, every track in the playlist is searched on Deezer and queued for download automatically during import — no manual steps needed.
+
+---
+
+## MCP Integration (Claude Desktop / Claude Code)
+
+Digarr ships an MCP server so you can drive it from chat — feed Claude a playlist link and tell it to import to Digarr, or ask whether you already have a song/artist.
+
+It runs inside the Digarr container itself (no extra port, no API token) by importing the backend's functions directly, launched over stdio via `docker exec`. Add this to your MCP client config (e.g. `claude_desktop_config.json`) and restart the client:
+
+```json
+{
+  "mcpServers": {
+    "digarr": {
+      "command": "docker",
+      "args": ["exec", "-i", "digarr", "python", "-m", "mcp_server.server"]
+    }
+  }
+}
+```
+
+Replace `digarr` in the `args` with your container name if you renamed it.
+
+### Available tools
+
+| Tool | Does |
+|---|---|
+| `list_playlists` | List every playlist Digarr has imported, with sync status per media server |
+| `get_playlist` | Full detail for one playlist, including its track list |
+| `parse_source` | Deterministically extract artists/tracks from a Spotify playlist URL or M3U content (not for arbitrary URLs/text — see below) |
+| `import_playlist` | Create a playlist in Digarr: adds artists to Lidarr and pushes to Plex/Jellyfin/Navidrome/Spotify/Deemix |
+| `refresh_playlist` | Re-fetch a playlist's source and add any new artists/tracks |
+| `sync_playlist` / `sync_all` | Push one or every playlist to Plex, Jellyfin, or Navidrome |
+| `search_library` | Check whether you already have a song/artist in your Plex/Jellyfin/Navidrome library |
+| `lidarr_check_artists` | Check which artist names already exist in Lidarr |
+| `lidarr_wanted` | Missing/wanted albums, restricted to artists Digarr has imported |
+
+For a generic URL or pasted text (a blog post, a Reddit thread, a raw list), don't call `parse_source` — that routes through Digarr's own configured AI provider. Instead let Claude fetch/read the content and build the artist/track list itself, then hand it straight to `import_playlist`. `parse_source` is only for Spotify playlist links and M3U files, which Digarr parses deterministically without AI.
 
 ---
 
