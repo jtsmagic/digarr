@@ -35,6 +35,7 @@ Launch (from the container, CWD=/app):
 """
 import os
 import sys
+import time
 from urllib.parse import urlparse
 
 import uvicorn
@@ -44,6 +45,28 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_server import tools
 from mcp_server.oidc_verifier import OIDCTokenVerifier, discover_jwks_uri
+
+
+def _discover_jwks_uri_with_retry(issuer_url: str) -> str:
+    """
+    Retries indefinitely with capped exponential backoff. This process is
+    launched once by start.sh with no supervisor to restart it — if the OIDC
+    provider isn't reachable yet (e.g. it's still booting after a host
+    reboot) and this raised straight through, MCP would stay dead until the
+    container was manually restarted, as happened 2026-07-22.
+    """
+    delay = 2.0
+    while True:
+        try:
+            return discover_jwks_uri(issuer_url)
+        except Exception as exc:
+            print(
+                f"mcp_server.http_server: OIDC discovery at {issuer_url} failed "
+                f"({exc}); retrying in {delay:.0f}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 60.0)
 
 
 def main() -> None:
@@ -60,7 +83,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    jwks_uri = discover_jwks_uri(issuer_url)
+    jwks_uri = _discover_jwks_uri_with_retry(issuer_url)
     verifier = OIDCTokenVerifier(issuer_url=issuer_url, jwks_uri=jwks_uri, audience=client_id)
 
     # nginx proxies the real public hostname straight through (Host header
