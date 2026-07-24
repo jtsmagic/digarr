@@ -14,6 +14,7 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 
 - **Parse anything** — paste a URL, upload an M3U, drop in a raw text list, or use a Spotify playlist URL; M3U URLs are auto-detected, no separate tab needed
 - **AI-powered extraction** — Claude or OpenAI identifies artists and tracks from unstructured content; confidence scores dim low-confidence results so you can review before adding
+- **Site scripts** — drop a small parser into `backend/parsers/scripts/` for a specific site (e.g. a "recently played" page) and Digarr uses it instead of AI for matching URLs, on both import and every refresh — zero AI cost for sites you've written one for. See [Site scripts](#site-scripts-no-ai-parsing-for-specific-sources) below.
 - **Lidarr integration** — search, check library, and add artists in one click; fully optional
 - **Deemix integration** — automatically queue every playlist track to Deezer/downloads via a self-hosted Deemix instance during import
 - **Track status** — see which tracks are downloaded (green/yellow/red) vs missing
@@ -67,6 +68,19 @@ That's it.
 
 ### Import from a URL
 Paste any URL — a Pitchfork best-of list, a music blog, a Reddit thread — and Digarr will fetch the page and use Claude to extract every artist and track mentioned. M3U URLs (`.m3u`, `.m3u8`) are auto-detected and parsed directly without AI.
+
+### Site scripts (no-AI parsing for specific sources)
+For a URL you import/refresh often — a radio station's "recently played" page, a specific blog's format, anything with a consistent structure — you can write a small deterministic parser instead of paying for AI extraction every time. Drop a `.py` file into `backend/parsers/scripts/` defining:
+
+```python
+URL_PATTERN = r"https?://example\.com/some/path"
+
+async def parse(url: str) -> list[dict]:
+    # fetch/scrape `url` however this site needs, return one dict per track:
+    return [{"artist": "...", "title": "...", "album": None}, ...]
+```
+
+Any playlist whose source URL matches `URL_PATTERN` uses that script instead of Digarr's AI provider — on the initial import *and* every subsequent refresh (manual or scheduled), so it's zero AI cost going forward, not just a one-time bypass. `parsers/text.fetch_raw_html(url, user_agent=...)` is available for scripts that need real HTML markup rather than AI-oriented plain text. See `backend/parsers/scripts/xmplaylist.py` for a working example (a "recently played" radio station page, parsed via a repeating HTML structure). If a script returns fewer than 3 tracks, Digarr treats it as a failure (site likely changed or blocked the request) rather than wiping the playlist.
 
 ### Import from M3U file
 Upload an M3U file or drag-and-drop it. Digarr parses the `#EXTINF` tags directly, no AI needed.

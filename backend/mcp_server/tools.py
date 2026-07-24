@@ -217,29 +217,7 @@ async def replace_playlist(
     Runs in the background and returns immediately with a job_id, same as
     import_playlist — poll get_import_status(job_id) for progress/results.
     """
-    pl = digarr.get_playlist(playlist_id)
-    if not pl:
-        raise ValueError(f"Playlist {playlist_id} not found")
-
-    req = digarr.ImportJobRequest(
-        artists=artists,
-        tracks=tracks,
-        playlist_name=pl["name"],
-        source_url=pl.get("source_url"),
-        source_type=pl.get("source_type"),
-        include_in_refresh=True,
-        sync_targets=sync_targets or [],
-    )
-    artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
-    digarr.update_playlist(playlist_id, artist_names, req.tracks, pl.get("artists_added") or [])
-    digarr.touch_playlist_refreshed(playlist_id)
-
-    job = digarr._new_job(pl["name"], len(req.artists))
-    job["playlist_id"] = playlist_id
-    digarr._jobs[job["id"]] = job
-    digarr.db_save_import_job(job)
-    asyncio.create_task(digarr._run_import_job(job["id"], req, playlist_id))
-    return job
+    return await digarr.replace_playlist_data(playlist_id, artists, tracks, sync_targets)
 
 
 async def append_playlist(
@@ -261,33 +239,7 @@ async def append_playlist(
     Runs in the background and returns immediately with a job_id, same as
     import_playlist/replace_playlist — poll get_import_status(job_id) for progress/results.
     """
-    pl = digarr.get_playlist(playlist_id)
-    if not pl:
-        raise ValueError(f"Playlist {playlist_id} not found")
-
-    existing_names = {
-        (a if isinstance(a, str) else a.get("name", "")).lower()
-        for a in (pl.get("artists") or [])
-    }
-    merged_artists = list(pl.get("artists") or [])
-    for a in artists or []:
-        name = a["name"] if isinstance(a, dict) else a
-        if name and name.lower() not in existing_names:
-            merged_artists.append(a)
-            existing_names.add(name.lower())
-
-    existing_track_keys = {
-        ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
-        for t in (pl.get("tracks") or [])
-    }
-    merged_tracks = list(pl.get("tracks") or [])
-    for t in tracks or []:
-        key = ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
-        if key not in existing_track_keys:
-            merged_tracks.append(t)
-            existing_track_keys.add(key)
-
-    return await replace_playlist(playlist_id, merged_artists, merged_tracks, sync_targets)
+    return await digarr.append_playlist_data(playlist_id, artists, tracks, sync_targets)
 
 
 async def refresh_playlist(playlist_id: int) -> dict:

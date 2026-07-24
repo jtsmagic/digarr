@@ -70,3 +70,26 @@ async def fetch_url_content(url: str) -> str:
         text = soup.get_text(separator="\n", strip=True)
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         return "\n".join(lines)
+
+
+async def fetch_raw_html(url: str, user_agent: str | None = None) -> str:
+    """
+    Fetch a URL and return its raw, un-stripped response body — for site
+    scripts (see parsers/scripts/) that need actual HTML markup structure
+    rather than the AI-oriented plain text fetch_url_content produces.
+    Shares the same SSRF guard and size cap as fetch_url_content.
+    """
+    _assert_safe_url(url)
+
+    headers = {"User-Agent": user_agent or "Mozilla/5.0 (compatible; Digarr/1.0; music playlist importer)"}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with client.stream("GET", url, headers=headers) as r:
+            r.raise_for_status()
+            chunks = []
+            total = 0
+            async for chunk in r.aiter_bytes(chunk_size=65536):
+                total += len(chunk)
+                if total > _MAX_CONTENT_BYTES:
+                    raise ValueError("Response too large (limit: 5 MB)")
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8", errors="ignore")

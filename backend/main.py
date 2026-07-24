@@ -112,6 +112,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from parsers.m3u import parse_m3u_content
 from parsers.text import fetch_url_content
+from parsers.scripts import find_script
 from spotify import (
     extract_playlist_id, get_access_token, fetch_playlist,
     generate_pkce_pair, get_oauth_token, exchange_code as spotify_exchange_code,
@@ -1033,6 +1034,82 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     _prune_completed_jobs()
 
 
+async def replace_playlist_data(
+    playlist_id: int,
+    artists: list,
+    tracks: list,
+    sync_targets: Optional[list] = None,
+) -> dict:
+    """
+    Overwrite an existing playlist's artist/track list with data the caller already
+    extracted (no Digarr AI call) and re-push it to sync_targets (or every configured
+    target). Used by the replace_playlist MCP tool.
+    """
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise ValueError(f"Playlist {playlist_id} not found")
+
+    req = ImportJobRequest(
+        artists=artists,
+        tracks=tracks,
+        playlist_name=pl["name"],
+        source_url=pl.get("source_url"),
+        source_type=pl.get("source_type"),
+        include_in_refresh=True,
+        sync_targets=sync_targets or [],
+    )
+    artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
+    update_playlist(playlist_id, artist_names, req.tracks, pl.get("artists_added") or [])
+    touch_playlist_refreshed(playlist_id)
+
+    job = _new_job(pl["name"], len(req.artists))
+    job["playlist_id"] = playlist_id
+    _jobs[job["id"]] = job
+    db_save_import_job(job)
+    asyncio.create_task(_run_import_job(job["id"], req, playlist_id))
+    return job
+
+
+async def append_playlist_data(
+    playlist_id: int,
+    artists: Optional[list] = None,
+    tracks: Optional[list] = None,
+    sync_targets: Optional[list] = None,
+) -> dict:
+    """
+    Merge new artists/tracks into an existing playlist (case-insensitive dedup against
+    what's already there) and delegate to replace_playlist_data. Used by the
+    append_playlist MCP tool.
+    """
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise ValueError(f"Playlist {playlist_id} not found")
+
+    existing_names = {
+        (a if isinstance(a, str) else a.get("name", "")).lower()
+        for a in (pl.get("artists") or [])
+    }
+    merged_artists = list(pl.get("artists") or [])
+    for a in artists or []:
+        name = a["name"] if isinstance(a, dict) else a
+        if name and name.lower() not in existing_names:
+            merged_artists.append(a)
+            existing_names.add(name.lower())
+
+    existing_track_keys = {
+        ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
+        for t in (pl.get("tracks") or [])
+    }
+    merged_tracks = list(pl.get("tracks") or [])
+    for t in tracks or []:
+        key = ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
+        if key not in existing_track_keys:
+            merged_tracks.append(t)
+            existing_track_keys.add(key)
+
+    return await replace_playlist_data(playlist_id, merged_artists, merged_tracks, sync_targets)
+
+
 @app.post("/api/import/start")
 async def start_import_job(req: ImportJobRequest):
     name = req.playlist_name.strip() or f"Import {datetime.utcnow().strftime('%b %d')}"
@@ -1160,6 +1237,25 @@ async def parse_input(request: Request, req: ParseRequest):
                 "tracks": data["tracks"],
                 "raw_source": req.content,
                 "playlist_name": req.playlist_name or data["name"],
+            }
+
+    # Site script — deterministic, no-AI parse for a known site pattern
+    if req.input_type == "url":
+        script = find_script(req.content)
+        if script:
+            tracks = await script.parse(req.content)
+            if len(tracks) < 3:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Site script returned too few tracks — the site may have changed or blocked the request.",
+                )
+            artists = list({t["artist"]: {"name": t["artist"]} for t in tracks if t.get("artist")}.values())
+            return {
+                "artists": artists,
+                "tracks": tracks,
+                "raw_source": req.content,
+                "playlist_name": req.playlist_name,
+                "detected_source_type": "url",
             }
 
     # Fetch content if URL
@@ -1657,21 +1753,32 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
             new_artists_dicts = data["artists"]
             new_tracks = data["tracks"]
         else:
-            content = await fetch_url_content(source_url)
-            if source_type == "m3u_url" or content.strip().startswith("#EXTM3U"):
-                new_tracks = parse_m3u_content(content)
+            script = find_script(source_url) if source_type == "url" else None
+            if script:
+                new_tracks = await script.parse(source_url)
+                if len(new_tracks) < 3:
+                    raise ValueError(
+                        f"Site script for {source_url!r} returned too few tracks "
+                        "— site may have changed or blocked the request; refresh aborted "
+                        "to avoid wiping the playlist's real content."
+                    )
                 new_artists_dicts = list({t["artist"]: {"name": t["artist"]} for t in new_tracks if t.get("artist")}.values())
             else:
-                ai = make_ai_provider(config)
-                result = await ai.extract_artists_and_tracks(content)
-                new_artists_dicts = deduplicate_artists(result.get("artists", []))
-                new_tracks = result.get("tracks", [])
-                usage = result.get("usage")
-                if usage:
-                    db_increment_stat("tokens_input_total", usage.get("input_tokens", 0))
-                    db_increment_stat("tokens_output_total", usage.get("output_tokens", 0))
-                    db_increment_stat(f"tokens_input_{usage.get('provider', 'unknown')}", usage.get("input_tokens", 0))
-                    db_increment_stat(f"tokens_output_{usage.get('provider', 'unknown')}", usage.get("output_tokens", 0))
+                content = await fetch_url_content(source_url)
+                if source_type == "m3u_url" or content.strip().startswith("#EXTM3U"):
+                    new_tracks = parse_m3u_content(content)
+                    new_artists_dicts = list({t["artist"]: {"name": t["artist"]} for t in new_tracks if t.get("artist")}.values())
+                else:
+                    ai = make_ai_provider(config)
+                    result = await ai.extract_artists_and_tracks(content)
+                    new_artists_dicts = deduplicate_artists(result.get("artists", []))
+                    new_tracks = result.get("tracks", [])
+                    usage = result.get("usage")
+                    if usage:
+                        db_increment_stat("tokens_input_total", usage.get("input_tokens", 0))
+                        db_increment_stat("tokens_output_total", usage.get("output_tokens", 0))
+                        db_increment_stat(f"tokens_input_{usage.get('provider', 'unknown')}", usage.get("input_tokens", 0))
+                        db_increment_stat(f"tokens_output_{usage.get('provider', 'unknown')}", usage.get("output_tokens", 0))
 
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
     existing_lower = {a.lower() for a in (pl.get("artists") or [])}
