@@ -786,6 +786,29 @@ def _prune_completed_jobs():
         db_delete_import_job(job_id)
 
 
+async def _delete_old_playlist_if_any(delete_coro_factory, old_id, label: str) -> bool:
+    """
+    Delete an existing media-server playlist before recreating it, mirroring
+    _do_refresh_playlist_inner's pattern. Returns True if it's safe to create
+    a new one (nothing existed, or the old one is confirmed gone) — False if
+    the delete failed for a reason other than "already gone", in which case
+    the caller must skip creating a new playlist to avoid a duplicate.
+    """
+    if not old_id:
+        return True
+    try:
+        await delete_coro_factory()
+        return True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return True
+        logger.warning("%s push: delete of old playlist failed (%s), skipping recreate to avoid duplicate", label, e)
+        return False
+    except Exception as e:
+        logger.warning("%s push: delete of old playlist failed (%s), skipping recreate to avoid duplicate", label, e)
+        return False
+
+
 async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     """Process artists in the background; playlist already exists in the DB."""
     job = _jobs[job_id]
@@ -793,6 +816,7 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
 
     config = load_config()
     blocklist = {normalize(a) for a in (config.get("artist_blocklist") or [])}
+    existing_pl = get_playlist(playlist_id) or {}
 
     targets = set(req.sync_targets) if req.sync_targets else {"plex", "spotify", "jellyfin", "navidrome", "deemix"}
 
@@ -804,7 +828,10 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
             pc = PlexClient(config["plex_url"], config["plex_token"],
                             config["plex_library_section_id"])
             matched_keys, unmatched, total = await pc.match_tracks(req.tracks, playlist_name=job["playlist_name"])
-            if matched_keys:
+            old_plex_id = existing_pl.get("plex_playlist_id")
+            plex_old_gone = await _delete_old_playlist_if_any(
+                lambda: pc.delete_playlist(old_plex_id), old_plex_id, "Plex")
+            if matched_keys and plex_old_gone:
                 plex_name = _plex_playlist_name(job["playlist_name"], config)
                 plex_id = await pc.create_playlist(plex_name, matched_keys)
                 update_playlist_plex_result(playlist_id, plex_id,
@@ -820,7 +847,10 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
         try:
             jf = JellyfinClient(config["jellyfin_url"], config["jellyfin_api_key"])
             matched_ids, _, total = await jf.match_tracks(req.tracks)
-            if matched_ids:
+            old_jf_id = existing_pl.get("jellyfin_playlist_id")
+            jf_old_gone = await _delete_old_playlist_if_any(
+                lambda: jf.delete_playlist(old_jf_id), old_jf_id, "Jellyfin")
+            if matched_ids and jf_old_gone:
                 jf_name = _jellyfin_playlist_name(job["playlist_name"], config)
                 jf_id = await jf.create_playlist(jf_name, matched_ids)
                 update_playlist_jellyfin_result(playlist_id, jf_id, len(matched_ids), total)
@@ -837,7 +867,10 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                 config.get("navidrome_password", ""),
             )
             matched_ids, _, total = await nd.match_tracks(req.tracks)
-            if matched_ids:
+            old_nd_id = existing_pl.get("navidrome_playlist_id")
+            nd_old_gone = await _delete_old_playlist_if_any(
+                lambda: nd.delete_playlist(old_nd_id), old_nd_id, "Navidrome")
+            if matched_ids and nd_old_gone:
                 nd_name = _navidrome_playlist_name(job["playlist_name"], config)
                 nd_id = await nd.create_playlist(nd_name, matched_ids)
                 update_playlist_navidrome_result(playlist_id, nd_id, len(matched_ids), total)
