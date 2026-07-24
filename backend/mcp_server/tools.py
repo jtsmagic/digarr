@@ -246,6 +246,17 @@ async def refresh_playlist(playlist_id: int) -> dict:
     return await _unwrap(digarr._do_refresh_playlist(playlist_id))
 
 
+async def delete_playlist(playlist_id: int) -> dict:
+    """
+    Permanently delete a Digarr playlist, including its pushed playlist on any media
+    server for which the corresponding *_delete_on_remove config flag is enabled
+    (e.g. plex_delete_on_remove). Artists already added to Lidarr by this playlist are
+    NOT removed from Lidarr. Find the playlist_id first via list_playlists/get_playlist
+    — this cannot be undone, so confirm you have the right id before calling it.
+    """
+    return await _unwrap(digarr.delete_playlist_route(playlist_id))
+
+
 _SYNC_FUNCS = {
     "plex": (digarr.sync_plex_playlist, digarr.sync_all_plex),
     "jellyfin": (digarr.sync_jellyfin_playlist, digarr.sync_all_jellyfin),
@@ -290,6 +301,7 @@ ALL_TOOLS = [
     get_import_status,
     replace_playlist,
     refresh_playlist,
+    delete_playlist,
     sync_playlist,
     sync_all,
     search_library,
