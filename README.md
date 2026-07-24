@@ -28,10 +28,10 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 - **Playlist refresh** — re-fetch any source URL, add net-new artists to Lidarr, and re-sync all connected media servers; merge mode appends new tracks rather than replacing
 - **Scheduled refresh** — auto-refresh all playlists on a configurable interval (1h through bi-weekly); per-playlist include/exclude control; webhook fires after each run
 - **Scheduled media server sync** — independent sync intervals for Plex, Jellyfin, and Navidrome; fills playlists in as Lidarr finishes downloading
-- **Discover page** — curated feeds from Spotify, ListenBrainz, Similar to Library, and Discogs Wantlist; review recommendations with library status badges and import directly
+- **Discover page** — curated feeds from Spotify, ListenBrainz, and Similar to Library; review recommendations with library status badges and import directly
 - **Wanted/missing report** — see which Lidarr artists added via Digarr still have undownloaded albums
 - **Artist blocklist** — permanently ignore specific artists across all imports and refreshes
-- **MCP server** — control Digarr from Claude Desktop or Claude Code: feed it a link and have it import the playlist, check whether you already have a song/artist, or pull the Lidarr wanted report, all from chat
+- **MCP server** — control Digarr from Claude Desktop or Claude Code, over local stdio (`docker exec`) or a remote OAuth-protected HTTPS endpoint: feed it a link and have it import the playlist, check whether you already have a song/artist, or pull the Lidarr wanted report, all from chat
 - **Authentication** — password login (bcrypt) and/or OIDC SSO (Authentik, Keycloak, etc.); both can be active simultaneously; 30-day sessions
 - **Multi-AI support** — Claude (Haiku/Sonnet/Opus) and OpenAI (GPT-4o mini/GPT-4o), switchable from Settings with per-provider model selection
 - **Clean web UI** — dark, vinyl-inspired interface
@@ -109,13 +109,35 @@ Replace `digarr` in the `args` with your container name if you renamed it.
 | `get_playlist` | Full detail for one playlist, including its track list |
 | `parse_source` | Deterministically extract artists/tracks from a Spotify playlist URL or M3U content (not for arbitrary URLs/text — see below) |
 | `import_playlist` | Create a playlist in Digarr: adds artists to Lidarr and pushes to Plex/Jellyfin/Navidrome/Spotify/Deemix |
+| `get_import_status` | Poll a background job started by `import_playlist`/`replace_playlist`/`append_playlist` for progress and results |
+| `replace_playlist` | Overwrite an existing playlist's artist/track list with fresh data you supply — re-syncs it in place instead of creating a duplicate |
+| `append_playlist` | Add artists/tracks to an existing playlist without dropping what's already there |
 | `refresh_playlist` | Re-fetch a playlist's source and add any new artists/tracks |
+| `delete_playlist` | Permanently delete a playlist, including its pushed copy on any media server with the matching delete-on-remove setting enabled |
 | `sync_playlist` / `sync_all` | Push one or every playlist to Plex, Jellyfin, or Navidrome |
 | `search_library` | Check whether you already have a song/artist in your Plex/Jellyfin/Navidrome library |
 | `lidarr_check_artists` | Check which artist names already exist in Lidarr |
 | `lidarr_wanted` | Missing/wanted albums, restricted to artists Digarr has imported |
 
 For a generic URL or pasted text (a blog post, a Reddit thread, a raw list), don't call `parse_source` — that routes through Digarr's own configured AI provider. Instead let Claude fetch/read the content and build the artist/track list itself, then hand it straight to `import_playlist`. `parse_source` is only for Spotify playlist links and M3U files, which Digarr parses deterministically without AI.
+
+### Remote MCP endpoint (no `docker exec` access needed)
+
+Besides the stdio server above, Digarr can also expose an OAuth-protected MCP endpoint over HTTPS, for MCP clients that can't `docker exec` into the host (e.g. Claude Desktop's remote "Custom Connector", or a scheduled Claude Code routine running in the cloud). It's a separate process inside the same container, proxied at `/mcp` by the built-in nginx config.
+
+It's opt-in: set these three environment variables on the container (all required together — leaving any unset disables the endpoint entirely, with no extra network exposure):
+
+| Env var | Description |
+|---|---|
+| `DIGARR_MCP_ISSUER_URL` | OIDC issuer for a **dedicated** OAuth application/provider (Authentik, Keycloak, Authelia, etc.) — use a separate app from Digarr's own web login |
+| `DIGARR_MCP_PUBLIC_URL` | The externally-reachable URL of this endpoint, e.g. `https://digarr.yourdomain.com/mcp` — must match exactly what's registered as the MCP server URL in the client |
+| `DIGARR_MCP_CLIENT_ID` | Optional — only needed if your provider sets a stable audience per client (Authentik does not; leave unset for Authentik) |
+
+Point the MCP client at `DIGARR_MCP_PUBLIC_URL`; it'll be walked through your OIDC provider's login/consent flow on first connect.
+
+### Using your own Claude access instead of Digarr's AI API key
+
+`parse_source`/`import_playlist`'s AI extraction always goes through Digarr's own configured, metered Anthropic/OpenAI key (see [Configuration](#configuration)) — billed separately from any Claude.ai subscription you may already have. If you'd rather not pay for both, you don't have to: `replace_playlist` and `append_playlist` take an already-extracted artist/track list and never call Digarr's AI provider at all. Point any Claude client at a playlist's source yourself (fetch it, read it, extract the list) and hand the result straight to `replace_playlist`/`append_playlist` — this works equally well as a one-off in Claude Desktop or as an unattended scheduled agent (e.g. a Claude Code cloud routine) that refreshes specific playlists on an interval, entirely outside Digarr's own AI path. Use the playlist's `set-refresh` exclude toggle (History page) so Digarr's own scheduled refresh doesn't also try to run — and pay for — the same playlist.
 
 ---
 
@@ -156,11 +178,12 @@ All config is stored in the Settings UI and persisted to `/data/config.json` ins
 | Spotify OAuth Redirect URI | Must match what you register in your Spotify app. Set to `https://your-digarr-host/auth/spotify/callback`. After saving, click **Connect with Spotify** to authorize |
 | ListenBrainz Username | Your ListenBrainz username — enables Weekly Jams, Daily Jams, and Weekly Exploration feeds on the Discover page |
 | Last.fm API Key | Required for Similar to Library discovery. Get a free key at last.fm/api |
-| Discogs Username | Your Discogs username — required for Wantlist import on the Discover page |
-| Discogs Token | Your Discogs personal access token — generate one in Discogs → Settings → Developer |
 | Deemix URL | Your self-hosted Deemix instance URL (e.g. `http://192.168.1.x:6595`) — enables automatic Deezer queueing on import |
 | Refresh Interval | How often to auto-refresh all playlists (off / 1h–bi-weekly) |
+| Refresh Delay Between Playlists | Seconds to wait between each playlist during a scheduled refresh run, to avoid bursting Lidarr/media-server requests |
+| Refresh Max New Artists | Caps how many net-new artists a single scheduled refresh run will add to Lidarr (0 = unlimited) |
 | Webhook URL | Optional URL to POST a JSON summary after every scheduled refresh run |
+| Webhook Only On Changes | When enabled, the webhook only fires for refresh runs that actually found new artists/tracks |
 | Refresh Merge Tracks | When enabled, refreshes append new tracks instead of replacing the stored list |
 | Password | Set a login password directly in Settings → General. Stored as a bcrypt hash in `config.json`. |
 | OIDC Issuer / Client ID / Secret / Redirect URI | SSO via any OIDC provider (Authentik, Keycloak, etc.) — see [Authentication](#authentication) below |
@@ -313,7 +336,6 @@ You can supply any sensitive key via environment variable instead of storing it 
 | `DIGARR_SPOTIFY_CLIENT_ID` | Spotify client ID |
 | `DIGARR_SPOTIFY_CLIENT_SECRET` | Spotify client secret |
 | `DIGARR_LASTFM_KEY` | Last.fm API key |
-| `DIGARR_DISCOGS_TOKEN` | Discogs personal access token |
 
 This lets you use Docker `--env-file`, Compose `env_file:`, or a secrets manager without ever writing keys to disk.
 
