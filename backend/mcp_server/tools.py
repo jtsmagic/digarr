@@ -241,6 +241,54 @@ async def replace_playlist(
     return job
 
 
+async def append_playlist(
+    playlist_id: int,
+    artists: Optional[list] = None,
+    tracks: Optional[list[dict]] = None,
+    sync_targets: Optional[list[str]] = None,
+) -> dict:
+    """
+    Add artists/tracks to an EXISTING playlist without dropping what's already there —
+    use this instead of replace_playlist when you want to grow a playlist rather than
+    overwrite its contents. Find the playlist_id first via list_playlists/get_playlist.
+
+    Artists already in the playlist (case-insensitive name match) and tracks already in
+    it (case-insensitive artist+title match) are left alone; only genuinely new ones are
+    added. New artists get added to Lidarr, and the playlist is re-pushed to sync_targets
+    (or every configured target if omitted) with the merged contents.
+
+    Runs in the background and returns immediately with a job_id, same as
+    import_playlist/replace_playlist — poll get_import_status(job_id) for progress/results.
+    """
+    pl = digarr.get_playlist(playlist_id)
+    if not pl:
+        raise ValueError(f"Playlist {playlist_id} not found")
+
+    existing_names = {
+        (a if isinstance(a, str) else a.get("name", "")).lower()
+        for a in (pl.get("artists") or [])
+    }
+    merged_artists = list(pl.get("artists") or [])
+    for a in artists or []:
+        name = a["name"] if isinstance(a, dict) else a
+        if name and name.lower() not in existing_names:
+            merged_artists.append(a)
+            existing_names.add(name.lower())
+
+    existing_track_keys = {
+        ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
+        for t in (pl.get("tracks") or [])
+    }
+    merged_tracks = list(pl.get("tracks") or [])
+    for t in tracks or []:
+        key = ((t.get("artist") or "").lower(), (t.get("title") or "").lower())
+        if key not in existing_track_keys:
+            merged_tracks.append(t)
+            existing_track_keys.add(key)
+
+    return await replace_playlist(playlist_id, merged_artists, merged_tracks, sync_targets)
+
+
 async def refresh_playlist(playlist_id: int) -> dict:
     """Re-fetch a playlist's original source and add any new artists/tracks found."""
     return await _unwrap(digarr._do_refresh_playlist(playlist_id))
@@ -300,6 +348,7 @@ ALL_TOOLS = [
     import_playlist,
     get_import_status,
     replace_playlist,
+    append_playlist,
     refresh_playlist,
     delete_playlist,
     sync_playlist,
