@@ -123,7 +123,7 @@ For a generic URL or pasted text (a blog post, a Reddit thread, a raw list), don
 
 ### Remote MCP endpoint (no `docker exec` access needed)
 
-Besides the stdio server above, Digarr can also expose an OAuth-protected MCP endpoint over HTTPS, for MCP clients that can't `docker exec` into the host (e.g. Claude Desktop's remote "Custom Connector", or a scheduled Claude Code routine running in the cloud). It's a separate process inside the same container, proxied at `/mcp` by the built-in nginx config.
+Besides the stdio server above, Digarr can also expose an OAuth-protected MCP endpoint over HTTPS, for MCP clients that can't `docker exec` into the host (e.g. Claude Desktop's remote "Custom Connector"). It's a separate process inside the same container, proxied at `/mcp` by the built-in nginx config.
 
 It's opt-in: set these three environment variables on the container (all required together — leaving any unset disables the endpoint entirely, with no extra network exposure):
 
@@ -134,10 +134,6 @@ It's opt-in: set these three environment variables on the container (all require
 | `DIGARR_MCP_CLIENT_ID` | Optional — only needed if your provider sets a stable audience per client (Authentik does not; leave unset for Authentik) |
 
 Point the MCP client at `DIGARR_MCP_PUBLIC_URL`; it'll be walked through your OIDC provider's login/consent flow on first connect.
-
-### Using your own Claude access instead of Digarr's AI API key
-
-`parse_source`/`import_playlist`'s AI extraction always goes through Digarr's own configured, metered Anthropic/OpenAI key (see [Configuration](#configuration)) — billed separately from any Claude.ai subscription you may already have. If you'd rather not pay for both, you don't have to: `replace_playlist` and `append_playlist` take an already-extracted artist/track list and never call Digarr's AI provider at all. Point any Claude client at a playlist's source yourself (fetch it, read it, extract the list) and hand the result straight to `replace_playlist`/`append_playlist` — this works equally well as a one-off in Claude Desktop or as an unattended scheduled agent (e.g. a Claude Code cloud routine) that refreshes specific playlists on an interval, entirely outside Digarr's own AI path. Use the playlist's `set-refresh` exclude toggle (History page) so Digarr's own scheduled refresh doesn't also try to run — and pay for — the same playlist.
 
 ---
 
