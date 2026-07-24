@@ -232,6 +232,7 @@ async def replace_playlist(
     )
     artist_names = [a["name"] if isinstance(a, dict) else a for a in req.artists]
     digarr.update_playlist(playlist_id, artist_names, req.tracks, pl.get("artists_added") or [])
+    digarr.touch_playlist_refreshed(playlist_id)
 
     job = digarr._new_job(pl["name"], len(req.artists))
     job["playlist_id"] = playlist_id
