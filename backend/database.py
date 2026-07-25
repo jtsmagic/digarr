@@ -151,6 +151,15 @@ def init_db():
     """)
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_jobs (
+            playlist_id  INTEGER PRIMARY KEY,
+            job_json     TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            status       TEXT NOT NULL
+        )
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS stats (
             key        TEXT PRIMARY KEY,
             value_int  INTEGER NOT NULL DEFAULT 0,
@@ -891,6 +900,44 @@ def db_delete_import_jobs_for_playlist(playlist_id: int) -> None:
         conn.execute(f"DELETE FROM import_jobs WHERE id IN ({placeholders})", to_delete)
         conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Refresh job persistence — the app runs multiple uvicorn worker processes
+# with no session affinity, so an in-memory-only dict here would be invisible
+# to whichever worker handles the next poll (see refresh_playlist_status).
+# ---------------------------------------------------------------------------
+
+def db_save_refresh_job(playlist_id: int, job: dict) -> None:
+    conn = get_db()
+    conn.execute(
+        """INSERT OR REPLACE INTO refresh_jobs (playlist_id, job_json, created_at, status)
+           VALUES (?, ?, ?, ?)""",
+        (playlist_id, json.dumps(job), datetime.utcnow().isoformat(), job["status"]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_load_refresh_job(playlist_id: int) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT job_json FROM refresh_jobs WHERE playlist_id = ?", (playlist_id,)).fetchone()
+    conn.close()
+    return json.loads(row[0]) if row else None
+
+
+def db_delete_refresh_job(playlist_id: int) -> None:
+    conn = get_db()
+    conn.execute("DELETE FROM refresh_jobs WHERE playlist_id = ?", (playlist_id,))
+    conn.commit()
+    conn.close()
+
+
+def db_get_running_refresh_playlist_ids() -> list[int]:
+    conn = get_db()
+    rows = conn.execute("SELECT playlist_id FROM refresh_jobs WHERE status = 'running'").fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 
 def update_playlist_deemix_result(

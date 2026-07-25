@@ -107,6 +107,7 @@ from database import (
     update_playlist_deemix_result,
     db_increment_stat, db_set_stat_text, db_set_stat_text_if_unset, db_get_all_stats,
     try_claim_refresh, clear_refresh_lock,
+    db_save_refresh_job, db_load_refresh_job, db_get_running_refresh_playlist_ids,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -1660,7 +1661,6 @@ async def rename_playlist_route(playlist_id: int, req: RenamePlaylistRequest):
     return {"ok": True, "name": new_name}
 
 _refresh_locks: dict[int, asyncio.Lock] = {}
-_refresh_jobs: dict[int, dict] = {}  # playlist_id -> {job_id, status, result, error}
 
 async def _do_refresh_playlist(playlist_id: int) -> dict:
     """Shared refresh logic used by the scheduler (runs inline, caller handles locking)."""
@@ -1679,12 +1679,17 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
             clear_refresh_lock(playlist_id)
 
 async def _run_refresh_job(playlist_id: int, job_id: str) -> None:
-    """Background task wrapper — runs refresh and stores result in _refresh_jobs."""
+    """
+    Background task wrapper — runs refresh and persists the result to the
+    refresh_jobs table (not an in-memory dict: the app runs multiple uvicorn
+    worker processes with no session affinity, so the status-polling request
+    can easily land on a different worker than the one running this job).
+    """
     try:
         result = await _do_refresh_playlist(playlist_id)
-        _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "done", "result": result, "error": None}
+        db_save_refresh_job(playlist_id, {"job_id": job_id, "status": "done", "result": result, "error": None})
     except Exception as exc:
-        _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "error", "result": None, "error": str(exc)}
+        db_save_refresh_job(playlist_id, {"job_id": job_id, "status": "error", "result": None, "error": str(exc)})
 
 async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     config = load_config()
@@ -2032,22 +2037,22 @@ async def refresh_playlist(playlist_id: int):
         raise HTTPException(status_code=404, detail="Playlist not found")
     if not pl.get("source_url") or pl.get("source_type") not in ("url", "m3u_url", "listenbrainz", "similar", "discogs", "spotify"):
         raise HTTPException(status_code=400, detail="This playlist has no refreshable source URL.")
-    existing = _refresh_jobs.get(playlist_id)
+    existing = db_load_refresh_job(playlist_id)
     if existing and existing["status"] == "running":
         return {"job_id": existing["job_id"], "status": "running"}
     job_id = str(uuid.uuid4())
-    _refresh_jobs[playlist_id] = {"job_id": job_id, "status": "running", "result": None, "error": None}
+    db_save_refresh_job(playlist_id, {"job_id": job_id, "status": "running", "result": None, "error": None})
     asyncio.create_task(_run_refresh_job(playlist_id, job_id))
     return {"job_id": job_id, "status": "running"}
 
 @app.get("/api/playlists/refresh/running")
 async def get_running_refreshes():
     """Returns playlist IDs that currently have a running refresh job."""
-    return {"running": [pid for pid, job in _refresh_jobs.items() if job["status"] == "running"]}
+    return {"running": db_get_running_refresh_playlist_ids()}
 
 @app.get("/api/playlists/{playlist_id}/refresh/status")
 async def refresh_playlist_status(playlist_id: int):
-    job = _refresh_jobs.get(playlist_id)
+    job = db_load_refresh_job(playlist_id)
     if not job:
         raise HTTPException(status_code=404, detail="No refresh job found for this playlist")
     if job["status"] == "error":
