@@ -362,8 +362,17 @@ class LidarrClient:
             results = sorted(results, key=lambda r: _cast_score(r.get("artistName", "")), reverse=True)
             logger.info("Cast playlist detected — re-ranked top result for %r: %r", name, results[0].get("artistName"))
 
-        top = results[0]
-        logger.info("MusicBrainz top result for %r: %r (id=%s)",
+        # Lidarr's /artist/lookup aggregates every installed metadata provider, not just
+        # MusicBrainz. Plugin providers return namespaced ids ("12345@deezer") whereas
+        # MusicBrainz returns a bare UUID. Prefer MusicBrainz so a given artist resolves
+        # to one canonical record no matter which provider happens to rank first -
+        # otherwise the same artist can be added twice under two different ids. Fall
+        # back to the top result when MusicBrainz has no entry for the name.
+        top = next(
+            (r for r in results if "@" not in str(r.get("foreignArtistId", ""))),
+            results[0],
+        )
+        logger.info("Lookup top result for %r: %r (id=%s)",
                     name, top.get("artistName"), top.get("foreignArtistId"))
 
         payload = {

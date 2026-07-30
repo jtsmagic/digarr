@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 # Keywords indicating a cast recording / musical / soundtrack context.
 # 'cast' is matched as a whole word to avoid 'podcast'/'broadcast'.
@@ -20,8 +21,22 @@ def cast_score(name: str) -> int:
 
 
 def normalize(s: str) -> str:
-    """Lowercase, strip leading 'the ', remove punctuation for fuzzy matching."""
-    s = s.lower().strip()
+    """Lowercase, fold accents, strip leading 'the ', remove punctuation.
+
+    Accent folding matters because the same artist is spelled inconsistently across
+    sources - a playlist may say "Beyonce" where the library holds "Beyonce" with an
+    acute accent. Python's \\w is Unicode-aware, so stripping punctuation alone leaves
+    accented characters intact and the two spellings compare as different artists.
+
+    '&' and '$' are mapped to word/letter equivalents rather than deleted, so
+    "Hall & Oates" matches "Hall and Oates" and "A$AP" matches "ASAP".
+    """
+    s = (s or "").lower().strip()
+    s = s.replace("&", " and ").replace("$", "s")
+    # NFKD splits an accented character into base letter + combining mark; dropping
+    # the combining marks leaves the plain base letter behind.
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"^the\s+", "", s)
     s = re.sub(r"[^\w\s]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
