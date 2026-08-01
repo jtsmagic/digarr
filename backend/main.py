@@ -1992,14 +1992,25 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     if net_new_names and config.get("lidarr_url") and config.get("lidarr_api_key"):
         lidarr = make_lidarr_client(config)
         library = await _get_lidarr_artists(config)
+        async def _add_one(name: str):
+            async with _lidarr_add_sem:
+                return await lidarr.add_artist(
+                    name, album_hint=album_hint_map.get(name),
+                    _library=library, playlist_name=pl.get("name", ""),
+                )
+
         raw = await asyncio.gather(
-            *[lidarr.add_artist(name, album_hint=album_hint_map.get(name), _library=library, playlist_name=pl.get("name", "")) for name in net_new_names],
+            *[_add_one(name) for name in net_new_names],
             return_exceptions=True,
         )
         _extend_lidarr_artists(_added_artist_records(raw))
         lidarr_results = [
             r if not isinstance(r, BaseException)
-            else {"artist": net_new_names[i], "status": "error", "message": str(r)}
+            # str() of an httpx timeout is the empty string, so recording str(r)
+            # alone produced errors with no message at all - unreadable in the UI
+            # and impossible to tell apart from a genuine lookup failure.
+            else {"artist": net_new_names[i], "status": "error",
+                  "message": f"{type(r).__name__}: {r}" if str(r) else type(r).__name__}
             for i, r in enumerate(raw)
         ]
 
@@ -2059,18 +2070,22 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
 
     update_playlist(playlist_id, existing_names, tracks_to_save, all_artists_added)
     # A refresh only touches net-new artists, so its results describe a slice of the
-    # playlist, not all of it. Merge them over what is stored, keyed by artist, rather
-    # than replacing wholesale - otherwise a refresh that added two artists would erase
-    # the record of the other forty. Until this, refresh never persisted its results at
-    # all, so the History panel showed the original import's outcome forever. Artists
-    # this run did not touch carry forward unchanged, including past failures: refresh
-    # deliberately does not retry them.
-    if lidarr_results:
-        merged = {r["artist"]: r for r in (pl.get("lidarr_results") or []) if r.get("artist")}
-        for r in lidarr_results:
-            if r.get("artist"):
-                merged[r["artist"]] = r
-        update_playlist_import_results(playlist_id, all_artists_added, list(merged.values()))
+    # playlist, not all of it. Replacing wholesale would erase the record of every
+    # artist this run did not look at, so instead: keep the stored entries for artists
+    # still in the playlist, drop the ones that have left the source, then overlay this
+    # run on top. Dropping departed artists matters because refresh deliberately does
+    # not retry failures - without the prune, an artist that errored once and then fell
+    # out of the playlist keeps its error row forever with nothing able to clear it.
+    # This run is overlaid after the prune so its results survive regardless.
+    current_lower = {n.lower() for n in existing_names}
+    merged = {
+        r["artist"]: r for r in (pl.get("lidarr_results") or [])
+        if r.get("artist") and r["artist"].lower() in current_lower
+    }
+    for r in lidarr_results:
+        if r.get("artist"):
+            merged[r["artist"]] = r
+    update_playlist_import_results(playlist_id, all_artists_added, list(merged.values()))
     update_playlist_last_refresh_artists(playlist_id, net_new_names)
     touch_playlist_refreshed(playlist_id)
     config = load_config()
@@ -2457,6 +2472,23 @@ async def push_to_plex(req: PlexPlaylistRequest):
 # exists, which is a far more expensive mistake than a missed monitor.
 _LIDARR_ARTISTS_TTL = 1800.0
 _lidarr_artists_cache = {"at": 0.0, "data": None}
+
+# Caps concurrent add_artist calls across every refresh in this process.
+#
+# A refresh gathers all of a playlist's net-new artists at once, and a manual
+# refresh runs as its own background task, so it can race the scheduler's
+# otherwise-serial loop. Two playlists overlapping put 30+ simultaneous lookups
+# on Lidarr, whose metadata proxy does a MusicBrainz + Deezer round trip per
+# artist and cannot answer that many inside the client's 30s timeout. The
+# artists came back as bare httpx timeouts and were recorded as errors, which
+# read as real "this artist could not be added" failures when nothing was
+# actually wrong with them.
+#
+# Deliberately global rather than per-playlist: a per-playlist limit would still
+# let a manual refresh and a scheduled one stack on top of each other, which is
+# exactly the collision that caused this.
+LIDARR_ADD_CONCURRENCY = max(1, int(os.environ.get("DIGARR_LIDARR_ADD_CONCURRENCY", "4")))
+_lidarr_add_sem = asyncio.Semaphore(LIDARR_ADD_CONCURRENCY)
 
 
 def _invalidate_lidarr_artists() -> None:
