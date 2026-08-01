@@ -39,7 +39,13 @@ export default function History() {
   const [schedulerStatus, setSchedulerStatus] = useState(null);
   const [runningNow, setRunningNow] = useState(false);
   const [runSummary, setRunSummary] = useState(null);
-  const [excludedIds, setExcludedIds] = useState(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('digarr_history_collapsed') || '{"static":true}');
+    } catch {
+      return { static: true };
+    }
+  });
   const [blocklist, setBlocklist] = useState([]);
   const [newBlocklistEntry, setNewBlocklistEntry] = useState('');
   const [blocklistSaving, setBlocklistSaving] = useState(false);
@@ -80,7 +86,6 @@ export default function History() {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
       setBlocklist(r.data.artist_blocklist || []);
       setGlobalMerge(r.data.refresh_merge_tracks || false);
-      setExcludedIds(new Set(r.data.refresh_excluded_playlist_ids || []));
       setLidarrConfigured(!!(r.data.lidarr_url && r.data.lidarr_api_key));
     }).catch(() => {});
     axios.get('/api/scheduler/status').then(r => setSchedulerStatus(r.data)).catch(() => {});
@@ -395,13 +400,66 @@ const handlePushToSpotify = async (pl) => {
     }
   };
 
-  const handleToggleExcluded = async (e, pl) => {
+  const REFRESHABLE_TYPES = ['url', 'm3u_url', 'listenbrainz', 'similar', 'spotify'];
+
+  // A playlist is "dynamic" when it is both refreshable and not pinned to never.
+  // Derived from the cadence rather than a separate flag, so the group a
+  // playlist sits in can never disagree with whether it actually refreshes.
+  const isDynamic = pl => {
+    if (!pl.source_url || !REFRESHABLE_TYPES.includes(pl.source_type)) return false;
+    const pin = pl.refresh_pin_hours;
+    return !(pin !== null && pin !== undefined && Number(pin) <= 0);
+  };
+
+  const formatHours = h => {
+    const n = Number(h);
+    if (!n || n <= 0) return null;
+    if (n < 1) return `${Math.round(n * 60)}m`;
+    return n >= 10 || Number.isInteger(n) ? `${Math.round(n)}h` : `${n.toFixed(1)}h`;
+  };
+
+  const cadenceLabel = pl => {
+    const pin = pl.refresh_pin_hours;
+    if (pin !== null && pin !== undefined) {
+      return Number(pin) <= 0 ? 'Never' : `Every ${formatHours(pin)}`;
+    }
+    const cur = formatHours(pl.refresh_interval_hours);
+    return cur ? `Adaptive · ~${cur}` : 'Adaptive';
+  };
+
+  const nextRefreshLabel = pl => {
+    if (!pl.next_refresh_at || !isDynamic(pl)) return null;
+    const ms = new Date(pl.next_refresh_at).getTime() - Date.now();
+    if (Number.isNaN(ms)) return null;
+    if (ms <= 0) return 'due now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `in ${mins}m`;
+    const hrs = mins / 60;
+    return hrs < 24 ? `in ${hrs.toFixed(hrs < 10 ? 1 : 0)}h` : `in ${Math.round(hrs / 24)}d`;
+  };
+
+  const toggleGroup = key => {
+    setCollapsedGroups(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem('digarr_history_collapsed', JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const handleSetCadence = async (e, pl, value) => {
     e.stopPropagation();
-    const next = new Set(excludedIds);
-    if (next.has(pl.id)) next.delete(pl.id);
-    else next.add(pl.id);
-    setExcludedIds(next);
-    axios.post('/api/config', { refresh_excluded_playlist_ids: [...next] }).catch(() => {});
+    const body = value === 'adaptive' ? { adaptive: true } : { pin_hours: Number(value) };
+    try {
+      const r = await axios.post(`/api/playlists/${pl.id}/set-refresh`, body);
+      setPlaylists(prev => prev.map(p => p.id === pl.id ? {
+        ...p,
+        refresh_pin_hours: r.data.pin_hours,
+        refresh_interval_hours: r.data.interval_hours,
+        next_refresh_at: r.data.next_refresh_at,
+      } : p));
+    } catch {
+      /* leave the previous value in place on failure */
+    }
   };
 
   const handleSetMergeTracks = async (e, pl, value) => {
@@ -720,7 +778,24 @@ const handlePushToSpotify = async (pl) => {
         </div>
       ) : (
         <div style={{ display: 'grid', gap: '1rem' }}>
-          {playlists.map(pl => {
+          {[
+            { key: 'dynamic', label: 'Auto-refreshing', items: playlists.filter(isDynamic) },
+            { key: 'static', label: 'Not refreshing', items: playlists.filter(p => !isDynamic(p)) },
+          ].map(group => group.items.length === 0 ? null : (
+            <div key={group.key}>
+              <div
+                onClick={() => toggleGroup(group.key)}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
+                         userSelect: 'none', padding: '0.35rem 0', marginBottom: '0.35rem',
+                         fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em',
+                         color: 'var(--text-muted)' }}>
+                <span style={{ display: 'inline-block', transition: 'transform 0.15s',
+                               transform: collapsedGroups[group.key] ? 'rotate(0deg)' : 'rotate(90deg)' }}>›</span>
+                {group.label} ({group.items.length})
+              </div>
+              {!collapsedGroups[group.key] && (
+                <div style={{ display: 'grid', gap: '1rem' }}>
+                  {group.items.map(pl => {
             const sync = syncStates[pl.id] || {};
             const jellyfinSync = jellyfinSyncStates[pl.id] || {};
             const navidromeSync = navidromeSyncStates[pl.id] || {};
@@ -1275,14 +1350,28 @@ const handlePushToSpotify = async (pl) => {
                     })()}
 
                     {canRefresh && (() => {
-                      const excluded = excludedIds.has(pl.id);
+                      const pin = pl.refresh_pin_hours;
+                      const value = (pin === null || pin === undefined) ? 'adaptive' : String(Number(pin));
+                      const next = nextRefreshLabel(pl);
                       return (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
-                          onClick={e => handleToggleExcluded(e, pl)}>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: excluded ? 'var(--text-muted)' : 'var(--green)' }}>
-                            {excluded ? '○' : '✓'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
+                          onClick={e => e.stopPropagation()}>
+                          <span style={{ fontSize: 12 }}>Refresh</span>
+                          <select
+                            value={value}
+                            onChange={e => handleSetCadence(e, pl, e.target.value)}
+                            style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4 }}>
+                            <option value="adaptive">Adaptive</option>
+                            <option value="1">Every 1h</option>
+                            <option value="3">Every 3h</option>
+                            <option value="6">Every 6h</option>
+                            <option value="12">Every 12h</option>
+                            <option value="24">Every 24h</option>
+                            <option value="0">Never</option>
+                          </select>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {cadenceLabel(pl)}{next ? ` · next ${next}` : ''}
                           </span>
-                          <span style={{ fontSize: 12 }}>Include in scheduled refresh</span>
                         </div>
                       );
                     })()}
@@ -1306,7 +1395,11 @@ const handlePushToSpotify = async (pl) => {
                 )}
               </div>
             );
-          })}
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

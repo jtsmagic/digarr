@@ -11,7 +11,7 @@ import os
 import re
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import json as _json
 
@@ -48,6 +48,7 @@ from database import (
     update_playlist_jellyfin_result, update_playlist_navidrome_result,
     update_playlist_last_refresh_artists,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
+    set_playlist_refresh_pin, update_playlist_schedule,
     db_delete_import_jobs_for_playlist, db_delete_import_job,
     get_all_playlist_artist_names,
     # track_cache
@@ -261,10 +262,15 @@ async def startup():
     _reschedule_jellyfin_sync(int(config.get("jellyfin_sync_interval_hours") or 0))
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
     scheduler.start()
+    _migrate_refresh_scheduling()
+    global _refresh_worker_task
+    _refresh_worker_task = asyncio.create_task(_refresh_worker())
 
 @app.on_event("shutdown")
 async def shutdown():
     scheduler.shutdown(wait=False)
+    if _refresh_worker_task:
+        _refresh_worker_task.cancel()
 
 # --- Config ---
 
@@ -547,16 +553,218 @@ def update_config(config: dict):
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
     return {"status": "ok"}
 
+REFRESHABLE_TYPES = ("url", "m3u_url", "listenbrainz", "similar", "spotify")
+
+# Worker wake-up: set this after changing a cadence so the new deadline is
+# picked up immediately instead of on the next periodic re-check.
+_refresh_wake = asyncio.Event()
+_refresh_worker_task = None
+
+# Never sleep longer than this, so config edits and newly-added playlists are
+# noticed even if nobody signals the event.
+_REFRESH_MAX_SLEEP = 300.0
+
+
+def _adaptive_bounds(config) -> tuple:
+    floor = float(config.get("refresh_adaptive_floor_hours") or 1)
+    ceiling = float(config.get("refresh_adaptive_ceiling_hours") or 24)
+    growth = float(config.get("refresh_adaptive_growth") or 1.5)
+    floor = max(floor, 0.25)
+    return floor, max(ceiling, floor), max(growth, 1.01)
+
+
+def _is_refreshable(pl: dict) -> bool:
+    return bool(pl.get("source_url")) and pl.get("source_type") in REFRESHABLE_TYPES
+
+
+def _effective_interval(pl: dict, config) -> float:
+    """Hours between refreshes for this playlist. 0 means never."""
+    pin = pl.get("refresh_pin_hours")
+    if pin is not None:
+        return max(float(pin), 0.0)
+    floor, ceiling, _ = _adaptive_bounds(config)
+    return min(max(float(pl.get("refresh_interval_hours") or floor), floor), ceiling)
+
+
+def _parse_dt(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _compute_next(pl: dict, config, new_artists: int) -> tuple:
+    """Interval and deadline to use after a refresh.
+
+    Pinned playlists keep their fixed interval. Unpinned ones adapt: finding new
+    artists means the source is live, so drop back to the floor; finding none
+    means back off geometrically towards the ceiling. A playlist that stops
+    changing therefore stops being polled hard, and snaps back the moment it
+    changes again - no presets to pick.
+    """
+    floor, ceiling, growth = _adaptive_bounds(config)
+    pin = pl.get("refresh_pin_hours")
+    if pin is not None:
+        interval = max(float(pin), 0.0)
+        if interval <= 0:
+            return 0.0, None
+    else:
+        current = float(pl.get("refresh_interval_hours") or floor)
+        interval = floor if new_artists > 0 else min(current * growth, ceiling)
+        interval = min(max(interval, floor), ceiling)
+    return interval, (datetime.now(timezone.utc) + timedelta(hours=interval)).isoformat()
+
+
+def _scheduling_enabled(config) -> bool:
+    return int(config.get("refresh_interval_hours") or 0) > 0
+
+
+def _due_playlists(config, now=None) -> list:
+    """Refreshable, non-disabled playlists whose deadline has passed."""
+    now = now or datetime.now(timezone.utc)
+    due = []
+    for pl in get_playlists():
+        if not _is_refreshable(pl) or _effective_interval(pl, config) <= 0:
+            continue
+        deadline = _parse_dt(pl.get("next_refresh_at"))
+        if deadline is None or deadline <= now:
+            due.append(pl)
+    return due
+
+
+def _seconds_until_due(config) -> float:
+    if not _scheduling_enabled(config):
+        return _REFRESH_MAX_SLEEP
+    now = datetime.now(timezone.utc)
+    soonest = None
+    for pl in get_playlists():
+        if not _is_refreshable(pl) or _effective_interval(pl, config) <= 0:
+            continue
+        deadline = _parse_dt(pl.get("next_refresh_at"))
+        if deadline is None:
+            return 0.0
+        wait = (deadline - now).total_seconds()
+        soonest = wait if soonest is None else min(soonest, wait)
+    if soonest is None:
+        return _REFRESH_MAX_SLEEP
+    return max(0.0, min(soonest, _REFRESH_MAX_SLEEP))
+
+
+async def _process_due_playlists() -> None:
+    """Refresh everything currently due, one at a time.
+
+    Serial by design: this is what keeps a refresh cycle from firing dozens of
+    indexer searches at once, so no burst cap or inter-playlist delay is needed.
+    """
+    config = load_config()
+    if not _scheduling_enabled(config):
+        return
+    for pl in _due_playlists(config):
+        added = 0
+        try:
+            result = await _do_refresh_playlist(pl["id"])
+            added = result.get("new_artists_added", 0)
+            logger.info("Refresh: '%s' - %s new artist(s)", pl["name"], added)
+        except Exception as exc:
+            # The app runs several uvicorn workers, so every process has a copy of
+            # this loop. try_claim_refresh() lets exactly one of them win a given
+            # playlist; the losers must not fall through to rescheduling, because
+            # they would record a no-change result and back the playlist off even
+            # though the winner may have just found new artists.
+            if "already being refreshed" in str(exc):
+                continue
+            logger.warning("Refresh: '%s' failed: %s", pl["name"], exc)
+        # Re-read: the refresh updates last_refreshed_at and may change the pin.
+        fresh = get_playlist(pl["id"]) or pl
+        interval, next_at = _compute_next(fresh, config, added)
+        update_playlist_schedule(pl["id"], interval, next_at)
+        logger.info("Refresh: '%s' next in %.2fh", pl["name"], interval)
+
+
+async def _refresh_worker() -> None:
+    """Sleep until the earliest playlist deadline, refresh what is due, repeat."""
+    logger.info("Refresh worker started")
+    while True:
+        try:
+            delay = _seconds_until_due(load_config())
+            try:
+                await asyncio.wait_for(_refresh_wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            _refresh_wake.clear()
+            await _process_due_playlists()
+        except asyncio.CancelledError:
+            logger.info("Refresh worker stopped")
+            raise
+        except Exception:
+            logger.exception("Refresh worker error")
+            await asyncio.sleep(60)
+
+
+def _migrate_refresh_scheduling() -> None:
+    """One-off move of refresh state from config into the playlists table.
+
+    refresh_excluded_playlist_ids lived in a global config list, so entries for
+    deleted playlists accumulated forever. Pinning to 0 on the row instead means
+    the setting is deleted along with the playlist.
+    """
+    config = load_config()
+    excluded = config.get("refresh_excluded_playlist_ids")
+    playlists = get_playlists()
+    floor, ceiling, _ = _adaptive_bounds(config)
+    seed = min(max(float(config.get("refresh_interval_hours") or floor), floor), ceiling)
+
+    if excluded is not None:
+        ids = set()
+        for value in excluded:
+            try:
+                ids.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        migrated = 0
+        for pl in playlists:
+            if pl["id"] in ids and pl.get("refresh_pin_hours") is None:
+                set_playlist_refresh_pin(pl["id"], 0)
+                migrated += 1
+        # save_config() merges into the existing file rather than replacing it, so
+        # deleting a key through it is impossible. Blank the list instead: the
+        # stale ids disappear, and nothing reads this key any more now that the
+        # cadence lives on the playlist row.
+        if ids:
+            save_config({"refresh_excluded_playlist_ids": []})
+            logger.info(
+                "Refresh migration: pinned %s playlist(s) to never, cleared %s stale id(s)",
+                migrated, len(ids) - migrated,
+            )
+        playlists = get_playlists()
+
+    for pl in playlists:
+        if not _is_refreshable(pl) or pl.get("next_refresh_at"):
+            continue
+        if _effective_interval(pl, config) <= 0:
+            continue
+        base = _parse_dt(pl.get("last_refreshed_at")) or datetime.now(timezone.utc)
+        update_playlist_schedule(
+            pl["id"],
+            pl.get("refresh_interval_hours") or seed,
+            (base + timedelta(hours=seed)).isoformat(),
+        )
+
+
 def _reschedule(hours: int):
+    """Master switch for refreshing.
+
+    Cadence is per playlist and deadline-driven (see _refresh_worker), so this
+    no longer registers an interval job; `hours` of 0 disables refreshing and
+    anything above 0 enables it. Kept as a function so the existing call sites
+    and the config endpoint work unchanged.
+    """
     if scheduler.get_job("refresh_all"):
         scheduler.remove_job("refresh_all")
-    if hours > 0:
-        scheduler.add_job(
-            _refresh_all_playlists_job,
-            IntervalTrigger(hours=hours),
-            id="refresh_all",
-            replace_existing=True,
-        )
+    _refresh_wake.set()
 
 
 def _reschedule_plex_sync(hours: int):
@@ -582,12 +790,9 @@ async def _refresh_all_playlists_job() -> dict:
     logger.info("Scheduler: starting scheduled refresh")
     config = load_config()
     playlists = get_playlists()
-    excluded = set(config.get("refresh_excluded_playlist_ids") or [])
     refreshable = [
         pl for pl in playlists
-        if pl.get("source_url")
-        and pl.get("source_type") in ("url", "m3u_url", "listenbrainz", "similar", "spotify")
-        and pl["id"] not in excluded
+        if _is_refreshable(pl) and _effective_interval(pl, config) > 0
     ]
     delay = int(config.get("refresh_delay_between_playlists") or 0)
     max_new = int(config.get("refresh_max_new_artists") or 0)
@@ -1602,19 +1807,42 @@ async def delete_playlist_route(playlist_id: int):
     return {"ok": True}
 
 class SetRefreshRequest(BaseModel):
-    excluded: bool
+    # None = adapt automatically, 0 = never, >0 = pin to that many hours.
+    pin_hours: float | None = None
+    # Legacy field kept so older clients keep working: True == pin_hours 0.
+    excluded: bool | None = None
+    adaptive: bool | None = None
+
 
 @app.post("/api/playlists/{playlist_id}/set-refresh")
 def set_playlist_refresh(playlist_id: int, req: SetRefreshRequest):
-    config = load_config()
-    excluded = set(config.get("refresh_excluded_playlist_ids") or [])
-    if req.excluded:
-        excluded.add(playlist_id)
+    pl = get_playlist(playlist_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    if req.adaptive:
+        pin = None
+    elif req.pin_hours is not None:
+        pin = max(float(req.pin_hours), 0.0)
+    elif req.excluded is not None:
+        pin = 0.0 if req.excluded else None
     else:
-        excluded.discard(playlist_id)
-    config["refresh_excluded_playlist_ids"] = list(excluded)
-    save_config(config)
-    return {"ok": True}
+        pin = None
+
+    set_playlist_refresh_pin(playlist_id, pin)
+
+    config = load_config()
+    fresh = get_playlist(playlist_id) or pl
+    interval = _effective_interval(fresh, config)
+    if interval <= 0:
+        next_at = None
+    else:
+        base = _parse_dt(fresh.get("last_refreshed_at")) or datetime.now(timezone.utc)
+        next_at = max(base + timedelta(hours=interval),
+                      datetime.now(timezone.utc)).isoformat()
+    update_playlist_schedule(playlist_id, interval or None, next_at)
+    _refresh_wake.set()
+    return {"ok": True, "pin_hours": pin, "interval_hours": interval, "next_refresh_at": next_at}
 
 class SetMergeTracksRequest(BaseModel):
     merge_tracks: bool | None  # None = inherit global setting

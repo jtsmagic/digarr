@@ -195,6 +195,14 @@ def init_db():
         ("deemix_total_count", "INTEGER"),
         ("last_refresh_new_artists", "TEXT"),
         ("refresh_started_at", "TEXT"),
+        # Per-playlist refresh scheduling.
+        #   refresh_pin_hours    NULL = adapt automatically, 0 = never refresh,
+        #                        >0   = pinned to that many hours
+        #   refresh_interval_hours  current adaptive interval (state, not config)
+        #   next_refresh_at      deadline the scheduler sleeps until
+        ("refresh_pin_hours", "REAL"),
+        ("refresh_interval_hours", "REAL"),
+        ("next_refresh_at", "TEXT"),
     ]:
         try:
             c.execute(f"ALTER TABLE playlists ADD COLUMN {col} {typedef}")
@@ -333,7 +341,8 @@ def get_playlists() -> list:
                         jellyfin_playlist_id, jellyfin_matched_count, jellyfin_total_count,
                         navidrome_playlist_id, navidrome_matched_count, navidrome_total_count,
                         deemix_queued_count, deemix_total_count,
-                        last_refresh_new_artists
+                        last_refresh_new_artists,
+                        refresh_pin_hours, refresh_interval_hours, next_refresh_at
                  FROM playlists ORDER BY created_at DESC""")
     rows = c.fetchall()
     conn.close()
@@ -346,6 +355,33 @@ def get_playlists() -> list:
         d["last_refresh_new_artists"] = json.loads(d["last_refresh_new_artists"] or "null") if d.get("last_refresh_new_artists") else None
         result.append(d)
     return result
+
+
+def set_playlist_refresh_pin(playlist_id: int, pin_hours):
+    """Pin a playlist's refresh cadence.
+
+    None  -> adapt automatically
+    0     -> never refresh
+    >0    -> fixed interval in hours
+    """
+    conn = get_db()
+    conn.execute(
+        "UPDATE playlists SET refresh_pin_hours = ? WHERE id = ?",
+        (pin_hours, playlist_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_playlist_schedule(playlist_id: int, interval_hours, next_refresh_at):
+    """Persist the computed adaptive interval and the next due time."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE playlists SET refresh_interval_hours = ?, next_refresh_at = ? WHERE id = ?",
+        (interval_hours, next_refresh_at, playlist_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def update_playlist_plex_result(
