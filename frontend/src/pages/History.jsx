@@ -14,20 +14,28 @@ export default function History() {
   const [playlists, setPlaylists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
-  const [syncStates, setSyncStates] = useState({});  // { [id]: { loading, result, error } }
-  const [jellyfinSyncStates, setJellyfinSyncStates] = useState({});
-  const [navidromeSyncStates, setNavidromeSyncStates] = useState({});
+  // Plex, Jellyfin and Navidrome behave identically, so they are keyed by server
+  // name rather than given a parallel set of hooks and handlers each.
+  //   serverSync     { plex: { [playlistId]: { loading, result, error } }, ... }
+  //   serverSyncAll  { plex: { loading, result }, ... }
+  const [serverSync, setServerSync] = useState({});
+  const [serverSyncAll, setServerSyncAll] = useState({});
   const [spotifyPushStates, setSpotifyPushStates] = useState({});  // { [id]: { loading, result, error } }
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [jellyfinConfigured, setJellyfinConfigured] = useState(false);
   const [navidromeConfigured, setNavidromeConfigured] = useState(false);
   const [refreshStates, setRefreshStates] = useState({});  // { [id]: { loading, result, error } }
-  const [syncAllLoading, setSyncAllLoading] = useState(false);
-  const [syncAllResult, setSyncAllResult] = useState(null);
-  const [jellyfinSyncAllLoading, setJellyfinSyncAllLoading] = useState(false);
-  const [jellyfinSyncAllResult, setJellyfinSyncAllResult] = useState(null);
-  const [navidromeSyncAllLoading, setNavidromeSyncAllLoading] = useState(false);
-  const [navidromeSyncAllResult, setNavidromeSyncAllResult] = useState(null);
+  // Derived views onto the two states above, so the render keeps reading the
+  // same names it always has.
+  const syncStates = serverSync.plex || {};
+  const jellyfinSyncStates = serverSync.jellyfin || {};
+  const navidromeSyncStates = serverSync.navidrome || {};
+  const syncAllLoading = !!(serverSyncAll.plex && serverSyncAll.plex.loading);
+  const syncAllResult = (serverSyncAll.plex && serverSyncAll.plex.result) || null;
+  const jellyfinSyncAllLoading = !!(serverSyncAll.jellyfin && serverSyncAll.jellyfin.loading);
+  const jellyfinSyncAllResult = (serverSyncAll.jellyfin && serverSyncAll.jellyfin.result) || null;
+  const navidromeSyncAllLoading = !!(serverSyncAll.navidrome && serverSyncAll.navidrome.loading);
+  const navidromeSyncAllResult = (serverSyncAll.navidrome && serverSyncAll.navidrome.result) || null;
   const [confirmDelete, setConfirmDelete] = useState(null); // playlist id pending delete
   const [confirmRefresh, setConfirmRefresh] = useState(null); // playlist id pending refresh
   const [renamingId, setRenamingId] = useState(null); // playlist id being renamed
@@ -285,53 +293,35 @@ const handlePushToSpotify = async (pl) => {
     setWantedLoading(false);
   };
 
-  const handleSyncPlex = async (e, pl) => {
+  const setSyncState = (server, playlistId, state) =>
+    setServerSync(prev => ({ ...prev, [server]: { ...(prev[server] || {}), [playlistId]: state } }));
+
+  // Every server exposes the same contract: POST /api/<server>/playlist/<id>/sync
+  // returning { <server>_playlist_id, matched, total }.
+  const handleSyncServer = async (e, pl, server, label) => {
     e.stopPropagation();
-    setSyncStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
+    setSyncState(server, pl.id, { loading: true, result: null, error: null });
     try {
-      const res = await axios.post(`/api/plex/playlist/${pl.id}/sync`);
-      setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
-      setPlaylists(prev => prev.map(p =>
-        p.id === pl.id ? {
-          ...p,
-          plex_playlist_id: res.data.plex_playlist_id,
-          plex_matched_count: res.data.matched,
-          plex_total_count: res.data.total,
-        } : p
-      ));
+      const res = await axios.post(`/api/${server}/playlist/${pl.id}/sync`);
+      setSyncState(server, pl.id, { loading: false, result: res.data, error: null });
+      setPlaylists(prev => prev.map(p => p.id === pl.id ? {
+        ...p,
+        [`${server}_playlist_id`]: res.data[`${server}_playlist_id`],
+        [`${server}_matched_count`]: res.data.matched,
+        [`${server}_total_count`]: res.data.total,
+      } : p));
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Plex sync failed.';
-      setSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: msg } }));
+      setSyncState(server, pl.id, {
+        loading: false,
+        result: null,
+        error: err.response?.data?.detail || `${label} sync failed.`,
+      });
     }
   };
 
-  const handleSyncJellyfin = async (e, pl) => {
-    e.stopPropagation();
-    setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
-    try {
-      const res = await axios.post(`/api/jellyfin/playlist/${pl.id}/sync`);
-      setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
-      setPlaylists(prev => prev.map(p =>
-        p.id === pl.id ? { ...p, jellyfin_playlist_id: res.data.jellyfin_playlist_id, jellyfin_matched_count: res.data.matched, jellyfin_total_count: res.data.total } : p
-      ));
-    } catch (err) {
-      setJellyfinSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Jellyfin sync failed.' } }));
-    }
-  };
-
-  const handleSyncNavidrome = async (e, pl) => {
-    e.stopPropagation();
-    setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
-    try {
-      const res = await axios.post(`/api/navidrome/playlist/${pl.id}/sync`);
-      setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: res.data, error: null } }));
-      setPlaylists(prev => prev.map(p =>
-        p.id === pl.id ? { ...p, navidrome_playlist_id: res.data.navidrome_playlist_id, navidrome_matched_count: res.data.matched, navidrome_total_count: res.data.total } : p
-      ));
-    } catch (err) {
-      setNavidromeSyncStates(prev => ({ ...prev, [pl.id]: { loading: false, result: null, error: err.response?.data?.detail || 'Navidrome sync failed.' } }));
-    }
-  };
+  const handleSyncPlex = (e, pl) => handleSyncServer(e, pl, 'plex', 'Plex');
+  const handleSyncJellyfin = (e, pl) => handleSyncServer(e, pl, 'jellyfin', 'Jellyfin');
+  const handleSyncNavidrome = (e, pl) => handleSyncServer(e, pl, 'navidrome', 'Navidrome');
 
   const pollRefreshJob = (playlistId, plRef) => {
     const poll = async () => {
@@ -345,17 +335,17 @@ const handlePushToSpotify = async (pl) => {
         const ps = data.plex_sync;
         if (ps) {
           mediaUpdate = { ...mediaUpdate, plex_playlist_id: ps.plex_playlist_id ?? pl.plex_playlist_id, plex_matched_count: ps.matched, plex_total_count: ps.total, plex_unmatched_tracks: ps.unmatched ?? [] };
-          setSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: ps, error: null } }));
+          setSyncState('plex', playlistId, { loading: false, result: ps, error: null });
         }
         const js = data.jellyfin_sync;
         if (js) {
           mediaUpdate = { ...mediaUpdate, jellyfin_matched_count: js.matched, jellyfin_total_count: js.total };
-          setJellyfinSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: js, error: null } }));
+          setSyncState('jellyfin', playlistId, { loading: false, result: js, error: null });
         }
         const ns = data.navidrome_sync;
         if (ns) {
           mediaUpdate = { ...mediaUpdate, navidrome_matched_count: ns.matched, navidrome_total_count: ns.total };
-          setNavidromeSyncStates(prev => ({ ...prev, [playlistId]: { loading: false, result: ns, error: null } }));
+          setSyncState('navidrome', playlistId, { loading: false, result: ns, error: null });
         }
         setRefreshStates(prev => ({ ...prev, [playlistId]: { loading: false, result: data, error: null } }));
         setPlaylists(prev => prev.map(p => p.id === playlistId ? { ...p, last_refreshed_at: new Date().toISOString(), ...mediaUpdate } : p));
@@ -469,63 +459,34 @@ const handlePushToSpotify = async (pl) => {
     if (selected?.id === pl.id) setSelected(prev => ({ ...prev, merge_tracks: value }));
   };
 
-  const handleSyncAll = async () => {
-    setSyncAllLoading(true);
-    setSyncAllResult(null);
+  const handleSyncAllServer = async (server, label) => {
+    setServerSyncAll(prev => ({ ...prev, [server]: { loading: true, result: null } }));
     try {
-      const res = await axios.post('/api/plex/sync-all');
-      setSyncAllResult(res.data);
-      // Update local playlist state with fresh match counts
+      const res = await axios.post(`/api/${server}/sync-all`);
+      setServerSyncAll(prev => ({ ...prev, [server]: { loading: false, result: res.data } }));
       setPlaylists(prev => prev.map(p => {
-        const r = res.data.results?.find(r => r.id === p.id);
+        const r = res.data.results?.find(x => x.id === p.id);
         if (!r || r.status !== 'ok') return p;
-        return {
-          ...p,
-          plex_playlist_id: r.plex_playlist_id ?? p.plex_playlist_id,
-          plex_matched_count: r.matched,
-          plex_total_count: r.total,
-          plex_unmatched_tracks: r.unmatched ?? p.plex_unmatched_tracks,
+        const patch = {
+          [`${server}_playlist_id`]: r[`${server}_playlist_id`] ?? p[`${server}_playlist_id`],
+          [`${server}_matched_count`]: r.matched,
+          [`${server}_total_count`]: r.total,
         };
+        // Only Plex reports per-track misses back to the list view.
+        if (server === 'plex') patch.plex_unmatched_tracks = r.unmatched ?? p.plex_unmatched_tracks;
+        return { ...p, ...patch };
       }));
     } catch (err) {
-      setSyncAllResult({ error: err.response?.data?.detail || 'Sync all failed.' });
+      setServerSyncAll(prev => ({
+        ...prev,
+        [server]: { loading: false, result: { error: err.response?.data?.detail || `${label} sync all failed.` } },
+      }));
     }
-    setSyncAllLoading(false);
   };
 
-  const handleSyncAllJellyfin = async () => {
-    setJellyfinSyncAllLoading(true);
-    setJellyfinSyncAllResult(null);
-    try {
-      const res = await axios.post('/api/jellyfin/sync-all');
-      setJellyfinSyncAllResult(res.data);
-      setPlaylists(prev => prev.map(p => {
-        const r = res.data.results?.find(r => r.id === p.id);
-        if (!r || r.status !== 'ok') return p;
-        return { ...p, jellyfin_playlist_id: r.jellyfin_playlist_id ?? p.jellyfin_playlist_id, jellyfin_matched_count: r.matched, jellyfin_total_count: r.total };
-      }));
-    } catch (err) {
-      setJellyfinSyncAllResult({ error: err.response?.data?.detail || 'Jellyfin sync all failed.' });
-    }
-    setJellyfinSyncAllLoading(false);
-  };
-
-  const handleSyncAllNavidrome = async () => {
-    setNavidromeSyncAllLoading(true);
-    setNavidromeSyncAllResult(null);
-    try {
-      const res = await axios.post('/api/navidrome/sync-all');
-      setNavidromeSyncAllResult(res.data);
-      setPlaylists(prev => prev.map(p => {
-        const r = res.data.results?.find(r => r.id === p.id);
-        if (!r || r.status !== 'ok') return p;
-        return { ...p, navidrome_playlist_id: r.navidrome_playlist_id ?? p.navidrome_playlist_id, navidrome_matched_count: r.matched, navidrome_total_count: r.total };
-      }));
-    } catch (err) {
-      setNavidromeSyncAllResult({ error: err.response?.data?.detail || 'Navidrome sync all failed.' });
-    }
-    setNavidromeSyncAllLoading(false);
-  };
+  const handleSyncAll = () => handleSyncAllServer('plex', 'Plex');
+  const handleSyncAllJellyfin = () => handleSyncAllServer('jellyfin', 'Jellyfin');
+  const handleSyncAllNavidrome = () => handleSyncAllServer('navidrome', 'Navidrome');
 
   const startRename = (e, pl) => {
     e.stopPropagation();
