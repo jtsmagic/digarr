@@ -17,6 +17,10 @@ needed) as a repeating block:
 This regex-parses that structure directly. Verified against
 xmplaylist.com/station/lithium on 2026-07-24: 24/24 entries extracted
 correctly, matching Digarr's own AI-based extraction of the same page.
+
+Stations also run promos between songs - tour dates, show plugs - and those are
+served in exactly the same <article> markup, so title/artist alone cannot tell
+them apart. See _TRACK_EVIDENCE below.
 """
 import html
 import re
@@ -28,6 +32,23 @@ URL_PATTERN = r"https?://(www\.)?xmplaylist\.com/station/"
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+# Only entries xmplaylist matched to a streaming service carry album art or an
+# outbound track link. Promos never do, because there is nothing to match: on
+# station/altnation (2026-08-01) this told 11 real tracks apart from 13 copies of
+# one tour-date promo that parsed as artist "NYC 6.10.26", title "@yungblud" -
+# and got as far as being added to Lidarr as an artist.
+#
+# Matching on the evidence of a service match, rather than on what a promo looks
+# like, means new promo formats are excluded by default instead of needing a new
+# rule each time. The cost is that a genuine track xmplaylist could not match to
+# any service is dropped too; that is the safer direction, since a missed track is
+# invisible while a junk one becomes an artist in your library.
+_TRACK_EVIDENCE = re.compile(
+    r'<img[^>]+src="https://i\.scdn\.co/'
+    r'|href="https://(?:open\.spotify\.com|geo\.music\.apple\.com)'
 )
 
 
@@ -48,6 +69,9 @@ async def parse(url: str) -> list[dict]:
         title_m = re.search(r"<h3[^>]*>(.*?)</h3>", art_html, re.S)
         artists_ul_m = re.search(r'<ul[^>]*-artists"[^>]*>(.*?)</ul>', art_html, re.S)
         if not title_m or not artists_ul_m:
+            continue
+
+        if not _TRACK_EVIDENCE.search(art_html):
             continue
 
         title = _strip_tags(title_m.group(1))

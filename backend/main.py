@@ -666,25 +666,17 @@ async def _process_due_playlists() -> None:
     if not _scheduling_enabled(config):
         return
     for pl in _due_playlists(config):
-        added = 0
         try:
             result = await _do_refresh_playlist(pl["id"])
             added = result.get("new_artists_added", 0)
             logger.info("Refresh: '%s' - %s new artist(s)", pl["name"], added)
         except RefreshBusy:
             # This run never happened - another worker won the playlist, or the
-            # queue was saturated. Fall through WITHOUT rescheduling: recording a
-            # no-change result would back the playlist off even though nothing was
-            # checked, and if another worker won it, that worker may have just
-            # found new artists.
+            # queue was saturated. Nothing to reschedule off: _do_refresh_playlist
+            # only sets a new deadline for a refresh that actually ran.
             continue
         except Exception as exc:
             logger.warning("Refresh: '%s' failed: %s", pl["name"], exc)
-        # Re-read: the refresh updates last_refreshed_at and may change the pin.
-        fresh = get_playlist(pl["id"]) or pl
-        interval, next_at = _compute_next(fresh, config, added)
-        update_playlist_schedule(pl["id"], interval, next_at)
-        logger.info("Refresh: '%s' next in %.2fh", pl["name"], interval)
 
 
 async def _refresh_worker() -> None:
@@ -1891,6 +1883,30 @@ _refresh_gate = asyncio.Semaphore(1)
 _refresh_pending = 0
 REFRESH_QUEUE_MAX = max(1, int(os.environ.get("DIGARR_REFRESH_QUEUE_MAX", "10")))
 
+def _reschedule_after_refresh(playlist_id: int, added: int) -> None:
+    """Set the next deadline after a refresh, however it was triggered.
+
+    This used to live in the scheduler's loop, which meant a refresh you ran by
+    hand left the old deadline in place - the playlist would then refresh again
+    on a clock that had already counted the work just done. Doing it here covers
+    every caller, so triggering a refresh manually restarts the cadence.
+
+    Also runs when a refresh raised, with added=0. That is deliberate: a playlist
+    that fails needs to back off like any other no-change run, otherwise its
+    deadline stays in the past and the worker retries it every pass.
+    """
+    try:
+        fresh = get_playlist(playlist_id)
+        if not fresh:
+            return
+        interval, next_at = _compute_next(fresh, load_config(), added)
+        update_playlist_schedule(playlist_id, interval, next_at)
+        logger.info("Refresh: '%s' next in %.2fh", fresh.get("name", playlist_id), interval)
+    except Exception:
+        # Never mask the refresh's own outcome with a scheduling failure.
+        logger.exception("Failed to reschedule playlist %s", playlist_id)
+
+
 async def _do_refresh_playlist(playlist_id: int) -> dict:
     """Shared refresh logic used by the scheduler (runs inline, caller handles locking)."""
     # In-process guard (fast path for same-process concurrent calls)
@@ -1913,10 +1929,16 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
         _refresh_pending += 1
         try:
             async with _refresh_gate:
+                added = 0
                 try:
-                    return await _do_refresh_playlist_inner(playlist_id)
+                    result = await _do_refresh_playlist_inner(playlist_id)
+                    added = result.get("new_artists_added", 0)
+                    return result
                 finally:
                     clear_refresh_lock(playlist_id)
+                    # Re-reads the playlist, so it picks up last_refreshed_at and
+                    # any pin the refresh itself changed.
+                    _reschedule_after_refresh(playlist_id, added)
         finally:
             _refresh_pending -= 1
 
