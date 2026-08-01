@@ -1,4 +1,6 @@
+import os
 import re
+import time
 import asyncio
 import logging
 import httpx
@@ -6,6 +8,22 @@ from typing import Optional
 from utils import normalize as _normalize, is_cast_context as _is_cast_playlist, cast_score as _cast_score
 
 logger = logging.getLogger(__name__)
+
+# Soulseek - and some trackers - ban clients that repeat searches in quick
+# succession. A playlist refresh can touch hundreds of albums, so AlbumSearch
+# commands are spaced out rather than fired as a burst. Shared by every client
+# instance so the pacing holds across concurrent refreshes.
+ALBUM_SEARCH_MIN_INTERVAL = float(os.getenv("ALBUM_SEARCH_MIN_INTERVAL", "5"))
+_album_search_lock = asyncio.Lock()
+_album_search_last = 0.0
+
+
+def _album_is_complete(album: dict) -> bool:
+    """True if Lidarr already holds every track for this album."""
+    stats = album.get("statistics") or {}
+    total = stats.get("trackCount") or 0
+    have = stats.get("trackFileCount") or 0
+    return total > 0 and have >= total
 
 
 class LidarrClient:
@@ -122,6 +140,20 @@ class LidarrClient:
         logger.warning("No albums found for artist_id=%d after %d attempts", artist_id, retries)
         return []
 
+    async def _album_search(self, album_id: int) -> None:
+        """Trigger an AlbumSearch, spaced from the previous one.
+
+        The rate limit lives here rather than at the call sites so that every
+        path which searches shares one clock.
+        """
+        global _album_search_last
+        async with _album_search_lock:
+            wait = ALBUM_SEARCH_MIN_INTERVAL - (time.monotonic() - _album_search_last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            _album_search_last = time.monotonic()
+        await self._post("/command", {"name": "AlbumSearch", "albumIds": [album_id]})
+
     async def _monitor_and_search_album(self, album: dict) -> str:
         """Mark one album monitored and trigger a search. Returns the album title."""
         updated = {**album, "monitored": True}
@@ -146,7 +178,7 @@ class LidarrClient:
         asyncio.create_task(self._remonitor_after_delay(latest))
 
         try:
-            await self._post("/command", {"name": "AlbumSearch", "albumIds": [album["id"]]})
+            await self._album_search(album["id"])
         except Exception as exc:
             logger.warning("AlbumSearch command failed for album_id=%d: %s", album["id"], exc)
         return album.get("title", "")
@@ -265,9 +297,16 @@ class LidarrClient:
             return {"status": "album_not_found", "artist": artist_name, "album": None}
 
         if target.get("monitored"):
-            # Album already monitored — still search in case it was never successfully grabbed
+            # Album already monitored. Only search when tracks are actually missing:
+            # re-searching a complete album on every refresh is what floods the
+            # indexers, and Soulseek bans clients that repeat searches quickly.
+            if _album_is_complete(target):
+                logger.info("Skipping search for already-complete %r / %r",
+                            artist_name, target.get("title"))
+                return {"status": "already_have", "artist": artist_name,
+                        "album": target.get("title")}
             try:
-                await self._post("/command", {"name": "AlbumSearch", "albumIds": [target["id"]]})
+                await self._album_search(target["id"])
                 logger.info("AlbumSearch triggered for already-monitored %r / %r",
                             artist_name, target.get("title"))
             except Exception as exc:
