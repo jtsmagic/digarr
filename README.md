@@ -27,12 +27,10 @@ Digarr is a self-hosted web app that imports artists and playlists using AI to p
 - **Playlist history** — every import saved locally with full track/artist detail; inline rename, delete, and refresh
 - **Background import queue** — imports run in the background with a live progress bar; navigate away and come back without losing state
 - **Playlist refresh** — re-fetch any source URL, add net-new artists to Lidarr, and re-sync all connected media servers; merge mode appends new tracks rather than replacing
-- **Scheduled refresh** — auto-refresh all playlists on a configurable interval (1h through bi-weekly); per-playlist include/exclude control; webhook fires after each run
+- **Adaptive scheduled refresh** — each playlist finds its own cadence: one that keeps turning up new artists stays on a short cycle, one that has gone quiet backs off on its own between a configurable floor and ceiling. Pin any playlist to a fixed interval or to never, from History. Webhook fires after each run
 - **Scheduled media server sync** — independent sync intervals for Plex, Jellyfin, and Navidrome; fills playlists in as Lidarr finishes downloading
-- **Discover page** — curated feeds from Spotify, ListenBrainz, and Similar to Library; review recommendations with library status badges and import directly
-- **Wanted/missing report** — see which Lidarr artists added via Digarr still have undownloaded albums
-- **Artist blocklist** — permanently ignore specific artists across all imports and refreshes
-- **MCP server** — control Digarr from Claude Desktop or Claude Code, over local stdio (`docker exec`) or a remote OAuth-protected HTTPS endpoint: feed it a link and have it import the playlist, check whether you already have a song/artist, or pull the Lidarr wanted report, all from chat
+- **Artist blocklist** — permanently ignore specific artists across all imports and refreshes (Settings → Artist Blocklist)
+- **MCP server** — control Digarr from Claude Desktop or Claude Code, over local stdio (`docker exec`) or a remote OAuth-protected HTTPS endpoint: feed it a link and have it import the playlist, or check whether you already have a song/artist, all from chat
 - **Authentication** — password login (bcrypt) and/or OIDC SSO (Authentik, Keycloak, etc.); both can be active simultaneously; 30-day sessions
 - **Multi-AI support** — Claude (Haiku/Sonnet/Opus) and OpenAI (GPT-4o mini/GPT-4o), switchable from Settings with per-provider model selection
 - **Clean web UI** — dark, vinyl-inspired interface
@@ -186,12 +184,10 @@ All config is stored in the Settings UI and persisted to `/data/config.json` ins
 | Delete from Navidrome on remove | When a playlist is deleted from Digarr, also delete it from Navidrome |
 | Spotify Client ID / Secret | Required for all Spotify features. Create a free app at developer.spotify.com → Dashboard → Create App |
 | Spotify OAuth Redirect URI | Must match what you register in your Spotify app. Set to `https://your-digarr-host/auth/spotify/callback`. After saving, click **Connect with Spotify** to authorize |
-| ListenBrainz Username | Your ListenBrainz username — enables Weekly Jams, Daily Jams, and Weekly Exploration feeds on the Discover page |
-| Last.fm API Key | Required for Similar to Library discovery. Get a free key at last.fm/api |
 | Deemix URL | Your self-hosted Deemix instance URL (e.g. `http://192.168.1.x:6595`) — enables automatic Deezer queueing on import |
-| Refresh Interval | How often to auto-refresh all playlists (off / 1h–bi-weekly) |
-| Refresh Delay Between Playlists | Seconds to wait between each playlist during a scheduled refresh run, to avoid bursting Lidarr/media-server requests |
-| Refresh Max New Artists | Caps how many net-new artists a single scheduled refresh run will add to Lidarr (0 = unlimited) |
+| Scheduled Refresh | Turns automatic refreshing on or off for every playlist at once |
+| Fastest Cadence | How often a playlist is checked while it is still turning up new artists |
+| Slowest Cadence | How far a playlist backs off once it stops producing anything new. It returns to the fastest cadence the moment it does |
 | Webhook URL | Optional URL to POST a JSON summary after every scheduled refresh run |
 | Webhook Only On Changes | When enabled, the webhook only fires for refresh runs that actually found new artists/tracks |
 | Refresh Merge Tracks | When enabled, refreshes append new tracks instead of replacing the stored list |
@@ -345,7 +341,6 @@ You can supply any sensitive key via environment variable instead of storing it 
 | `DIGARR_PLEX_TOKEN` | Plex token |
 | `DIGARR_SPOTIFY_CLIENT_ID` | Spotify client ID |
 | `DIGARR_SPOTIFY_CLIENT_SECRET` | Spotify client secret |
-| `DIGARR_LASTFM_KEY` | Last.fm API key |
 
 This lets you use Docker `--env-file`, Compose `env_file:`, or a secrets manager without ever writing keys to disk.
 
