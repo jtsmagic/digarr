@@ -1610,6 +1610,7 @@ async def add_single_artist(req: AddSingleArtistRequest):
             client.add_artist(artist_name, album_hint=album_hint),
             timeout=45.0,
         )
+        _extend_lidarr_artists(_added_artist_records([result]))
         # Always return the original requested artist name so the frontend result
         # mapping works correctly regardless of any canonical name substitution.
         result = {**result, "artist": req.artist}
@@ -2045,11 +2046,12 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     lidarr_results = []
     if net_new_names and config.get("lidarr_url") and config.get("lidarr_api_key"):
         lidarr = make_lidarr_client(config)
-        library = await lidarr.get_all_artists()
+        library = await _get_lidarr_artists(config)
         raw = await asyncio.gather(
             *[lidarr.add_artist(name, album_hint=album_hint_map.get(name), _library=library, playlist_name=pl.get("name", "")) for name in net_new_names],
             return_exceptions=True,
         )
+        _extend_lidarr_artists(_added_artist_records(raw))
         lidarr_results = [
             r if not isinstance(r, BaseException)
             else {"artist": net_new_names[i], "status": "error", "message": str(r)}
@@ -2483,6 +2485,69 @@ async def push_to_plex(req: PlexPlaylistRequest):
         "message": f"{len(matched_keys)}/{total} tracks matched in Plex",
     }
 
+# The full Lidarr artist list is fetched before a Plex sync so unmatched tracks
+# can have their albums monitored. On a large library that request takes longer
+# than the whole Plex sync it precedes, so it is cached.
+#
+# The TTL is only a backstop for artists added outside Digarr (Lidarr's own UI,
+# another tool). Whenever Digarr adds an artist itself it invalidates the cache
+# directly, so the common case is never stale rather than stale-for-N-minutes.
+#
+# Worst case if it is stale: one album goes unmonitored for a sync, and the next
+# sync fixes it. Note this cache is deliberately NOT used for the dedup library
+# passed to add_artist - a stale list there could re-add an artist that already
+# exists, which is a far more expensive mistake than a missed monitor.
+_LIDARR_ARTISTS_TTL = 1800.0
+_lidarr_artists_cache = {"at": 0.0, "data": None}
+
+
+def _invalidate_lidarr_artists() -> None:
+    """Drop the cached artist list entirely."""
+    _lidarr_artists_cache["at"] = 0.0
+    _lidarr_artists_cache["data"] = None
+
+
+def _added_artist_records(results) -> list:
+    """Pull the created Lidarr records out of a batch of add_artist() results."""
+    records = []
+    for r in results:
+        if isinstance(r, dict) and r.get("status") == "added":
+            data = r.get("data")
+            if isinstance(data, dict) and data.get("artistName"):
+                records.append(data)
+    return records
+
+
+def _extend_lidarr_artists(records: list) -> None:
+    """Fold newly-added artists into the cached list instead of dropping it.
+
+    Discarding thousands of correct records because three of them changed forces
+    the next caller to refetch the lot. The duplicate check is a name comparison
+    against this list (LidarrClient._match_in_library), so a list we extended
+    ourselves is indistinguishable from a refetched one - and a refresh pass that
+    touches several playlists now pays for one fetch rather than one per
+    playlist.
+    """
+    cached = _lidarr_artists_cache["data"]
+    if cached is None or not records:
+        return
+    cached.extend(records)
+    logger.debug("Lidarr artist cache: extended with %s new artist(s)", len(records))
+
+
+async def _get_lidarr_artists(config, force: bool = False):
+    now = time.monotonic()
+    cached = _lidarr_artists_cache["data"]
+    if not force and cached is not None and (now - _lidarr_artists_cache["at"]) < _LIDARR_ARTISTS_TTL:
+        logger.debug("Lidarr artist list: cache hit (%s artists)", len(cached))
+        return cached
+    data = await make_lidarr_client(config).get_all_artists()
+    _lidarr_artists_cache["at"] = now
+    _lidarr_artists_cache["data"] = data
+    logger.info("Lidarr artist list: fetched %s artists", len(data) if data else 0)
+    return data
+
+
 def _sync_progress_cb(playlist_id: int, server: str, offset: int, total: int):
     """Build an on_progress callback for a media client's match_tracks().
 
@@ -2551,6 +2616,7 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
         else:
             live_tracks.append(t)
 
+    db_set_sync_progress(pl["id"], "plex", len(tracks) - len(live_tracks), len(tracks))
     live_matched_keys, unmatched, _ = await plex_client.match_tracks(
         live_tracks,
         playlist_name=pl.get("name", ""),
@@ -2558,7 +2624,9 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
             pl["id"], "plex", len(tracks) - len(live_tracks), len(tracks)
         ),
     )
-    db_clear_sync_progress(pl["id"], "plex")
+    # Hold at the total while the playlist itself is rebuilt. Stale rows are
+    # ignored on read, and the UI only shows progress while a sync is running.
+    db_set_sync_progress(pl["id"], "plex", len(tracks), len(tracks))
     matched_keys = pre_matched_keys + cache_matched_keys + live_matched_keys
     total = len(tracks)
 
@@ -2627,11 +2695,13 @@ async def sync_plex_playlist(playlist_id: int):
     if not pl:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
+    db_set_sync_progress(playlist_id, "plex", 0, len(pl.get("tracks") or []))
+
     plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
 
     all_lidarr_artists = None
     if config.get("lidarr_url") and config.get("lidarr_api_key"):
-        all_lidarr_artists = await make_lidarr_client(config).get_all_artists()
+        all_lidarr_artists = await _get_lidarr_artists(config)
 
     return await _do_sync_plex_playlist(pl, plex_client, all_lidarr_artists, config)
 
@@ -2652,7 +2722,7 @@ async def sync_all_plex():
     plex_client = PlexClient(config["plex_url"], config["plex_token"], config["plex_library_section_id"])
     all_lidarr_artists = None
     if config.get("lidarr_url") and config.get("lidarr_api_key"):
-        all_lidarr_artists = await make_lidarr_client(config).get_all_artists()
+        all_lidarr_artists = await _get_lidarr_artists(config)
 
     # Fetch full playlist records (get_playlists omits tracks)
     full_playlists = [get_playlist(pl["id"]) for pl in playlists]
@@ -2698,13 +2768,14 @@ async def _do_sync_jellyfin_playlist(pl: dict, jf: JellyfinClient, config: dict)
             cache_matched.append(cached)
         else:
             live_tracks.append(t)
+    db_set_sync_progress(playlist_id, "jellyfin", len(tracks) - len(live_tracks), len(tracks))
     live_matched, unmatched, _ = await jf.match_tracks(
         live_tracks,
         on_progress=_sync_progress_cb(
             playlist_id, "jellyfin", len(tracks) - len(live_tracks), len(tracks)
         ),
     )
-    db_clear_sync_progress(playlist_id, "jellyfin")
+    db_set_sync_progress(playlist_id, "jellyfin", len(tracks), len(tracks))
     matched_ids = cache_matched + live_matched
     total = len(tracks)
     jf_name = _jellyfin_playlist_name(pl["name"], config)
@@ -2834,13 +2905,14 @@ async def _do_sync_navidrome_playlist(pl: dict, nd: NavidromeClient, config: dic
             cache_matched.append(cached)
         else:
             live_tracks.append(t)
+    db_set_sync_progress(playlist_id, "navidrome", len(tracks) - len(live_tracks), len(tracks))
     live_matched, unmatched, _ = await nd.match_tracks(
         live_tracks,
         on_progress=_sync_progress_cb(
             playlist_id, "navidrome", len(tracks) - len(live_tracks), len(tracks)
         ),
     )
-    db_clear_sync_progress(playlist_id, "navidrome")
+    db_set_sync_progress(playlist_id, "navidrome", len(tracks), len(tracks))
     matched_ids = cache_matched + live_matched
     total = len(tracks)
     nd_name = _navidrome_playlist_name(pl["name"], config)
