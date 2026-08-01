@@ -9,6 +9,7 @@ import io
 import logging
 import os
 import re
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -2489,11 +2490,21 @@ def _sync_progress_cb(playlist_id: int, server: str, offset: int, total: int):
     subset actually being searched, so "12/47" means what a user expects even
     when most tracks came straight from the match cache.
     """
+    state = {"last": 0.0}
+
     def report(done: int, _live_total: int) -> None:
+        # Writing once per track competes with the sync's own track-cache
+        # writes for the same database. Once a second is plenty to drive a
+        # progress readout, and the final tick always lands.
+        now = time.monotonic()
+        if done < total and (now - state["last"]) < 1.0:
+            return
+        state["last"] = now
         try:
             db_set_sync_progress(playlist_id, server, min(offset + done, total), total)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Never let progress reporting break or slow a sync.
+            logger.debug("sync progress write skipped: %s", exc)
     return report
 
 

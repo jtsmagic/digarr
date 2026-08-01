@@ -159,6 +159,14 @@ def init_db():
         )
     """)
 
+    # WAL lets readers run while a writer holds the lock. Without it the default
+    # rollback journal makes every concurrent read or write a potential
+    # "database is locked", which this app hits routinely with multiple workers.
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS sync_progress (
             playlist_id INTEGER NOT NULL,
@@ -228,7 +236,16 @@ def init_db():
     conn.close()
 
 def get_db():
-    return sqlite3.connect(DB_PATH)
+    """Open a connection with a real busy timeout.
+
+    Several writers exist at once - two uvicorn workers, the refresh worker and
+    per-request handlers - so a connection that gives up immediately (or after
+    the 5s default) turns ordinary contention into errors. WAL is enabled once
+    at init so readers never block writers.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
 
 
 # ---------------------------------------------------------------------------

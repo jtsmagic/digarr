@@ -20,4 +20,9 @@ if [ -n "$DIGARR_MCP_ISSUER_URL" ] && [ -n "$DIGARR_MCP_PUBLIC_URL" ]; then
 fi
 
 # Start FastAPI backend
-exec uvicorn main:app --host 127.0.0.1 --port "${UVICORN_PORT}" --workers "${DIGARR_WORKERS:-2}"
+# One worker by default. The app is I/O-bound (HTTP calls to Plex, Lidarr,
+# Spotify) and asyncio already handles concurrent requests within a single
+# process, so extra workers buy no throughput here - they only duplicate the
+# background refresh worker and multiply SQLite write contention. Raise
+# DIGARR_WORKERS if you actually front many concurrent users.
+exec uvicorn main:app --host 127.0.0.1 --port "${UVICORN_PORT}" --workers "${DIGARR_WORKERS:-1}"
