@@ -19,6 +19,8 @@ export default function History() {
   //   serverSync     { plex: { [playlistId]: { loading, result, error } }, ... }
   //   serverSyncAll  { plex: { loading, result }, ... }
   const [serverSync, setServerSync] = useState({});
+  // { plex: { "<playlistId>": { done, total } }, ... } while a sync runs
+  const [syncProgress, setSyncProgress] = useState({});
   const [serverSyncAll, setServerSyncAll] = useState({});
   const [spotifyPushStates, setSpotifyPushStates] = useState({});  // { [id]: { loading, result, error } }
   const [spotifyConnected, setSpotifyConnected] = useState(false);
@@ -291,6 +293,38 @@ const handlePushToSpotify = async (pl) => {
       setWantedData({ error: err.response?.data?.detail || 'Failed to load wanted list.' });
     }
     setWantedLoading(false);
+  };
+
+  // A media-server sync makes one search per uncached track, which can take
+  // tens of seconds. Poll the backend for its progress so the button can show
+  // real counts rather than an indefinite spinner. Polling only runs while a
+  // sync is in flight, and stops as soon as the last one finishes.
+  const anySyncLoading = Object.values(serverSync).some(
+    byId => Object.values(byId || {}).some(s => s && s.loading)
+  );
+
+  useEffect(() => {
+    if (!anySyncLoading) {
+      setSyncProgress({});
+      return undefined;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await axios.get('/api/sync/progress');
+        if (alive) setSyncProgress(r.data || {});
+      } catch {
+        /* transient failures are not worth surfacing mid-sync */
+      }
+    };
+    tick();
+    const handle = setInterval(tick, 1500);
+    return () => { alive = false; clearInterval(handle); };
+  }, [anySyncLoading]);
+
+  const syncingLabel = (server, pl) => {
+    const p = (syncProgress[server] || {})[String(pl.id)];
+    return p && p.total ? `Syncing ${p.done}/${p.total}` : 'Syncing\u2026';
   };
 
   const setSyncState = (server, playlistId, state) =>
@@ -923,7 +957,7 @@ const handlePushToSpotify = async (pl) => {
                         <button className="btn btn-ghost" style={{ fontSize: 10, color: 'var(--accent)', borderColor: 'var(--accent)' }}
                           disabled={sync.loading || refresh.loading} onClick={e => handleSyncPlex(e, pl)}>
                           {sync.loading
-                            ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
+                            ? <><span className="spinner" style={{ width: 10, height: 10 }} /> {syncingLabel('plex', pl)}</>
                             : pl.plex_playlist_id ? '⟳ Sync Plex' : '▶ Push to Plex'}
                         </button>
                         {sync.result && (
@@ -947,7 +981,7 @@ const handlePushToSpotify = async (pl) => {
                           <button className="btn btn-ghost" style={{ fontSize: 10, color: '#00a4dc', borderColor: '#00a4dc' }}
                             disabled={jellyfinSync.loading} onClick={e => handleSyncJellyfin(e, pl)}>
                             {jellyfinSync.loading
-                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
+                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> {syncingLabel('jellyfin', pl)}</>
                               : '⟳ Sync Jellyfin'}
                           </button>
                         )}
@@ -959,7 +993,7 @@ const handlePushToSpotify = async (pl) => {
                           <button className="btn btn-ghost" style={{ fontSize: 10, color: '#fc6e51', borderColor: '#fc6e51' }}
                             disabled={navidromeSync.loading} onClick={e => handleSyncNavidrome(e, pl)}>
                             {navidromeSync.loading
-                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Syncing…</>
+                              ? <><span className="spinner" style={{ width: 10, height: 10 }} /> {syncingLabel('navidrome', pl)}</>
                               : '⟳ Sync Navidrome'}
                           </button>
                         )}

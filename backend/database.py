@@ -160,6 +160,17 @@ def init_db():
     """)
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS sync_progress (
+            playlist_id INTEGER NOT NULL,
+            server      TEXT    NOT NULL,
+            done        INTEGER NOT NULL,
+            total       INTEGER NOT NULL,
+            updated_at  TEXT    NOT NULL,
+            PRIMARY KEY (playlist_id, server)
+        )
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS stats (
             key        TEXT PRIMARY KEY,
             value_int  INTEGER NOT NULL DEFAULT 0,
@@ -943,6 +954,47 @@ def db_delete_import_jobs_for_playlist(playlist_id: int) -> None:
 # with no session affinity, so an in-memory-only dict here would be invisible
 # to whichever worker handles the next poll (see refresh_playlist_status).
 # ---------------------------------------------------------------------------
+
+def db_set_sync_progress(playlist_id: int, server: str, done: int, total: int) -> None:
+    """Record how far a media-server sync has got.
+
+    Lives in the DB rather than memory because the app runs several uvicorn
+    workers: the request that polls for progress rarely lands on the worker
+    that is doing the syncing.
+    """
+    conn = get_db()
+    conn.execute(
+        """INSERT OR REPLACE INTO sync_progress (playlist_id, server, done, total, updated_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (playlist_id, server, done, total, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_clear_sync_progress(playlist_id: int, server: str) -> None:
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM sync_progress WHERE playlist_id = ? AND server = ?",
+        (playlist_id, server),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_sync_progress(max_age_seconds: int = 900) -> list:
+    """Active sync progress rows, dropping anything stale from a crashed run."""
+    from datetime import timedelta
+    cutoff = (datetime.utcnow() - timedelta(seconds=max_age_seconds)).isoformat()
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT playlist_id, server, done, total FROM sync_progress WHERE updated_at >= ?",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 
 def db_save_refresh_job(playlist_id: int, job: dict) -> None:
     conn = get_db()

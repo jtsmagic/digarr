@@ -86,14 +86,18 @@ class JellyfinClient:
         return None
 
     async def match_tracks(
-        self, tracks: List[dict]
+        self, tracks: List[dict], on_progress=None
     ) -> Tuple[List[str], List[dict], int]:
         semaphore = asyncio.Semaphore(5)
 
+        done = 0
+
         async def search_one(track):
+            nonlocal done
+            result = None
             async with semaphore:
                 try:
-                    return await self.search_track(
+                    result = await self.search_track(
                         track.get("artist", ""), track.get("title", "")
                     )
                 except Exception as exc:
@@ -103,7 +107,14 @@ class JellyfinClient:
                         track.get("title"),
                         exc,
                     )
-                    return None
+                    result = None
+            done += 1
+            if on_progress:
+                try:
+                    on_progress(done, len(tracks))
+                except Exception:
+                    pass
+            return result
 
         results = await asyncio.gather(*[search_one(t) for t in tracks])
         matched = [r for r in results if r is not None]

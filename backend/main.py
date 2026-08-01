@@ -49,6 +49,7 @@ from database import (
     update_playlist_last_refresh_artists,
     touch_playlist_refreshed, delete_playlist, rename_playlist, set_playlist_merge_tracks,
     set_playlist_refresh_pin, update_playlist_schedule,
+    db_set_sync_progress, db_clear_sync_progress, db_get_sync_progress,
     db_delete_import_jobs_for_playlist, db_delete_import_job,
     get_all_playlist_artist_names,
     # track_cache
@@ -2481,6 +2482,33 @@ async def push_to_plex(req: PlexPlaylistRequest):
         "message": f"{len(matched_keys)}/{total} tracks matched in Plex",
     }
 
+def _sync_progress_cb(playlist_id: int, server: str, offset: int, total: int):
+    """Build an on_progress callback for a media client's match_tracks().
+
+    Reported against the playlist's full track count, not just the uncached
+    subset actually being searched, so "12/47" means what a user expects even
+    when most tracks came straight from the match cache.
+    """
+    def report(done: int, _live_total: int) -> None:
+        try:
+            db_set_sync_progress(playlist_id, server, min(offset + done, total), total)
+        except Exception:
+            pass
+    return report
+
+
+@app.get("/api/sync/progress")
+def get_sync_progress():
+    """In-flight media-server sync progress, for the History page to poll."""
+    out = {}
+    for row in db_get_sync_progress():
+        out.setdefault(row["server"], {})[str(row["playlist_id"])] = {
+            "done": row["done"],
+            "total": row["total"],
+        }
+    return out
+
+
 async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_artists: list = None, config: dict = None) -> dict:
     """Core sync logic — shared by single-playlist and sync-all endpoints."""
     if config is None:
@@ -2512,7 +2540,14 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
         else:
             live_tracks.append(t)
 
-    live_matched_keys, unmatched, _ = await plex_client.match_tracks(live_tracks, playlist_name=pl.get("name", ""))
+    live_matched_keys, unmatched, _ = await plex_client.match_tracks(
+        live_tracks,
+        playlist_name=pl.get("name", ""),
+        on_progress=_sync_progress_cb(
+            pl["id"], "plex", len(tracks) - len(live_tracks), len(tracks)
+        ),
+    )
+    db_clear_sync_progress(pl["id"], "plex")
     matched_keys = pre_matched_keys + cache_matched_keys + live_matched_keys
     total = len(tracks)
 
@@ -2652,7 +2687,13 @@ async def _do_sync_jellyfin_playlist(pl: dict, jf: JellyfinClient, config: dict)
             cache_matched.append(cached)
         else:
             live_tracks.append(t)
-    live_matched, unmatched, _ = await jf.match_tracks(live_tracks)
+    live_matched, unmatched, _ = await jf.match_tracks(
+        live_tracks,
+        on_progress=_sync_progress_cb(
+            playlist_id, "jellyfin", len(tracks) - len(live_tracks), len(tracks)
+        ),
+    )
+    db_clear_sync_progress(playlist_id, "jellyfin")
     matched_ids = cache_matched + live_matched
     total = len(tracks)
     jf_name = _jellyfin_playlist_name(pl["name"], config)
@@ -2782,7 +2823,13 @@ async def _do_sync_navidrome_playlist(pl: dict, nd: NavidromeClient, config: dic
             cache_matched.append(cached)
         else:
             live_tracks.append(t)
-    live_matched, unmatched, _ = await nd.match_tracks(live_tracks)
+    live_matched, unmatched, _ = await nd.match_tracks(
+        live_tracks,
+        on_progress=_sync_progress_cb(
+            playlist_id, "navidrome", len(tracks) - len(live_tracks), len(tracks)
+        ),
+    )
+    db_clear_sync_progress(playlist_id, "navidrome")
     matched_ids = cache_matched + live_matched
     total = len(tracks)
     nd_name = _navidrome_playlist_name(pl["name"], config)

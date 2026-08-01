@@ -147,17 +147,21 @@ class PlexClient:
 
         return None
 
-    async def match_tracks(self, tracks: List[dict], playlist_name: str = "") -> Tuple[List[str], List[dict], int]:
+    async def match_tracks(self, tracks: List[dict], playlist_name: str = "", on_progress=None) -> Tuple[List[str], List[dict], int]:
         """
         Match a list of {artist, title} dicts against the Plex library.
         Returns (matched_ratingKeys, unmatched_tracks, total_track_count).
         """
         semaphore = asyncio.Semaphore(5)
 
+        done = 0
+
         async def search_one(track):
+            nonlocal done
+            result = None
             async with semaphore:
                 try:
-                    return await self.search_track(
+                    result = await self.search_track(
                         track.get('artist', ''),
                         track.get('title', ''),
                         track.get('album', ''),
@@ -165,7 +169,14 @@ class PlexClient:
                     )
                 except Exception as exc:
                     logger.warning("Plex search error for %r / %r: %s", track.get('artist'), track.get('title'), exc)
-                    return None
+                    result = None
+            done += 1
+            if on_progress:
+                try:
+                    on_progress(done, len(tracks))
+                except Exception:
+                    pass
+            return result
 
         results = await asyncio.gather(*[search_one(t) for t in tracks])
         matched = [r for r, t in zip(results, tracks) if r is not None]
