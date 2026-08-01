@@ -2012,7 +2012,7 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
             existing_names.append(name)
             seen_lower.add(name.lower())
 
-    newly_added = [r["artist"] for r in lidarr_results if r.get("status") in ("added", "exists")]
+    newly_added = [r["artist"] for r in lidarr_results if r.get("status") in ("added", "already_exists")]
     all_artists_added = list(set((pl.get("artists_added") or []) + newly_added))
 
     # Per-playlist override takes precedence; fall back to global setting.
@@ -2058,6 +2058,19 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
             tracks_to_save = enriched
 
     update_playlist(playlist_id, existing_names, tracks_to_save, all_artists_added)
+    # A refresh only touches net-new artists, so its results describe a slice of the
+    # playlist, not all of it. Merge them over what is stored, keyed by artist, rather
+    # than replacing wholesale - otherwise a refresh that added two artists would erase
+    # the record of the other forty. Until this, refresh never persisted its results at
+    # all, so the History panel showed the original import's outcome forever. Artists
+    # this run did not touch carry forward unchanged, including past failures: refresh
+    # deliberately does not retry them.
+    if lidarr_results:
+        merged = {r["artist"]: r for r in (pl.get("lidarr_results") or []) if r.get("artist")}
+        for r in lidarr_results:
+            if r.get("artist"):
+                merged[r["artist"]] = r
+        update_playlist_import_results(playlist_id, all_artists_added, list(merged.values()))
     update_playlist_last_refresh_artists(playlist_id, net_new_names)
     touch_playlist_refreshed(playlist_id)
     config = load_config()
