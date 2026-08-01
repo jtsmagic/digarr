@@ -2071,16 +2071,21 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     update_playlist(playlist_id, existing_names, tracks_to_save, all_artists_added)
     # A refresh only touches net-new artists, so its results describe a slice of the
     # playlist, not all of it. Replacing wholesale would erase the record of every
-    # artist this run did not look at, so instead: keep the stored entries for artists
-    # still in the playlist, drop the ones that have left the source, then overlay this
-    # run on top. Dropping departed artists matters because refresh deliberately does
-    # not retry failures - without the prune, an artist that errored once and then fell
-    # out of the playlist keeps its error row forever with nothing able to clear it.
-    # This run is overlaid after the prune so its results survive regardless.
+    # artist this run did not look at, so stored entries are carried forward - with
+    # two exclusions - and this run is overlaid on top.
+    #
+    # Dropped: artists no longer in the source, and every previous error. Errors are
+    # scoped to the run that produced them. Refresh does not retry a failure, so a
+    # carried-forward error can never be superseded by a later result and would sit
+    # on screen forever; a run that has been through the source again and not hit
+    # that problem should not still be reporting it. Successes carry forward because
+    # they stay true until the artist leaves the playlist.
     current_lower = {n.lower() for n in existing_names}
     merged = {
         r["artist"]: r for r in (pl.get("lidarr_results") or [])
-        if r.get("artist") and r["artist"].lower() in current_lower
+        if r.get("artist")
+        and r["artist"].lower() in current_lower
+        and r.get("status") != "error"
     }
     for r in lidarr_results:
         if r.get("artist"):
