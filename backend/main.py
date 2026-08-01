@@ -1148,6 +1148,13 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
     lidarr_ok = bool(config.get("lidarr_url") and config.get("lidarr_api_key"))
     lidarr_client = make_lidarr_client(config) if lidarr_ok else None
 
+    # Fetch the library once for the whole import. Without it add_artist falls back
+    # to its own full get_all_artists() per artist, which on a large Lidarr costs
+    # more than a quarter of the 45s budget each call allows - enough that slower
+    # artists timed out before finishing. Extended after each add, so later
+    # iterations still see what earlier ones created.
+    lidarr_library = await _get_lidarr_artists(config) if lidarr_ok else None
+
     results = []
 
     for i, artist_name in enumerate(artist_names):
@@ -1164,9 +1171,11 @@ async def _run_import_job(job_id: str, req: ImportJobRequest, playlist_id: int):
                 album_hint = album_hint_map.get(artist_name)
                 resolved = canonical_map.get(artist_name, artist_name)
                 result = await asyncio.wait_for(
-                    lidarr_client.add_artist(resolved, album_hint=album_hint),
+                    lidarr_client.add_artist(resolved, album_hint=album_hint,
+                                             _library=lidarr_library),
                     timeout=45.0,
                 )
+                _extend_lidarr_artists(_added_artist_records([result]))
                 result = {**result, "artist": artist_name}
         except asyncio.TimeoutError:
             result = {"artist": artist_name, "status": "error",
@@ -1608,7 +1617,8 @@ async def add_single_artist(req: AddSingleArtistRequest):
 
     try:
         result = await asyncio.wait_for(
-            client.add_artist(artist_name, album_hint=album_hint),
+            client.add_artist(artist_name, album_hint=album_hint,
+                              _library=await _get_lidarr_artists(config)),
             timeout=45.0,
         )
         _extend_lidarr_artists(_added_artist_records([result]))
