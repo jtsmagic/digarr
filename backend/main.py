@@ -671,14 +671,14 @@ async def _process_due_playlists() -> None:
             result = await _do_refresh_playlist(pl["id"])
             added = result.get("new_artists_added", 0)
             logger.info("Refresh: '%s' - %s new artist(s)", pl["name"], added)
+        except RefreshBusy:
+            # This run never happened - another worker won the playlist, or the
+            # queue was saturated. Fall through WITHOUT rescheduling: recording a
+            # no-change result would back the playlist off even though nothing was
+            # checked, and if another worker won it, that worker may have just
+            # found new artists.
+            continue
         except Exception as exc:
-            # The app runs several uvicorn workers, so every process has a copy of
-            # this loop. try_claim_refresh() lets exactly one of them win a given
-            # playlist; the losers must not fall through to rescheduling, because
-            # they would record a no-change result and back the playlist off even
-            # though the winner may have just found new artists.
-            if "already being refreshed" in str(exc):
-                continue
             logger.warning("Refresh: '%s' failed: %s", pl["name"], exc)
         # Re-read: the refresh updates last_refreshed_at and may change the pin.
         fresh = get_playlist(pl["id"]) or pl
@@ -1858,7 +1858,38 @@ async def rename_playlist_route(playlist_id: int, req: RenamePlaylistRequest):
     rename_playlist(playlist_id, new_name, plex_playlist_name=plex_playlist_name if pl.get("plex_playlist_id") else None)
     return {"ok": True, "name": new_name}
 
+class RefreshBusy(ValueError):
+    """This refresh did not run: the playlist is already being refreshed, or the
+    queue is saturated. Distinct from a refresh that ran and failed, because the
+    scheduler must not reschedule off the back of it - see _process_due_playlists.
+    Subclasses ValueError so existing callers that treat it as a bad-request are
+    unaffected."""
+
+
 _refresh_locks: dict[int, asyncio.Lock] = {}
+
+# One refresh at a time, process-wide.
+#
+# Per-playlist duplication is already handled below by try_claim_refresh and
+# _refresh_locks. This is the separate problem: two DIFFERENT playlists running at
+# once. A manual refresh runs as its own background task, so it can overlap the
+# scheduler's loop, and refreshing several playlists from the UI starts that many
+# concurrent runs. Nothing breaks - the Lidarr add and MusicBrainz throttles are
+# both global - but the runs contend, each finishes later than it would have if it had
+# simply waited its turn, and the interleaved logs are near-unreadable when
+# something does go wrong.
+#
+# The scheduler calls _do_refresh_playlist once per due playlist rather than
+# wrapping its whole loop, so the gate is released between playlists: a manual
+# refresh waits for the playlist in progress, not for the entire backlog. That is
+# deliberately most of what a priority queue would buy, without the machinery.
+#
+# Not persisted across restarts, by design: the scheduler re-derives due work from
+# next_refresh_at on boot, and a claim left behind by an interrupted run expires on
+# its own via try_claim_refresh's timeout.
+_refresh_gate = asyncio.Semaphore(1)
+_refresh_pending = 0
+REFRESH_QUEUE_MAX = max(1, int(os.environ.get("DIGARR_REFRESH_QUEUE_MAX", "10")))
 
 async def _do_refresh_playlist(playlist_id: int) -> dict:
     """Shared refresh logic used by the scheduler (runs inline, caller handles locking)."""
@@ -1866,15 +1897,28 @@ async def _do_refresh_playlist(playlist_id: int) -> dict:
     if playlist_id not in _refresh_locks:
         _refresh_locks[playlist_id] = asyncio.Lock()
     if _refresh_locks[playlist_id].locked():
-        raise ValueError(f"Playlist {playlist_id} is already being refreshed")
+        raise RefreshBusy(f"Playlist {playlist_id} is already being refreshed")
     # DB-level guard (cross-process: catches home + work tab both refreshing)
     if not try_claim_refresh(playlist_id):
-        raise ValueError(f"Playlist {playlist_id} is already being refreshed")
+        raise RefreshBusy(f"Playlist {playlist_id} is already being refreshed")
+    global _refresh_pending
     async with _refresh_locks[playlist_id]:
-        try:
-            return await _do_refresh_playlist_inner(playlist_id)
-        finally:
+        # Claimed above, so every exit from here has to release it - including the
+        # queue-full bail, which never reaches the inner call.
+        if _refresh_pending >= REFRESH_QUEUE_MAX:
             clear_refresh_lock(playlist_id)
+            raise RefreshBusy(
+                f"Refresh queue is full ({_refresh_pending} pending) - try again shortly"
+            )
+        _refresh_pending += 1
+        try:
+            async with _refresh_gate:
+                try:
+                    return await _do_refresh_playlist_inner(playlist_id)
+                finally:
+                    clear_refresh_lock(playlist_id)
+        finally:
+            _refresh_pending -= 1
 
 async def _run_refresh_job(playlist_id: int, job_id: str) -> None:
     """
@@ -2483,11 +2527,11 @@ _lidarr_artists_cache = {"at": 0.0, "data": None}
 # A refresh gathers all of a playlist's net-new artists at once, and a manual
 # refresh runs as its own background task, so it can race the scheduler's
 # otherwise-serial loop. Two playlists overlapping put 30+ simultaneous lookups
-# on Lidarr, whose metadata proxy does a MusicBrainz + Deezer round trip per
-# artist and cannot answer that many inside the client's 30s timeout. The
-# artists came back as bare httpx timeouts and were recorded as errors, which
-# read as real "this artist could not be added" failures when nothing was
-# actually wrong with them.
+# on Lidarr, whose metadata proxy makes its own upstream calls per artist and
+# cannot answer that many inside the client's 30s timeout. The artists came back
+# as bare httpx timeouts and were recorded as errors, which read as real "this
+# artist could not be added" failures when nothing was wrong with them. A proxy
+# that consults several sources per lookup reaches this point sooner.
 #
 # Deliberately global rather than per-playlist: a per-playlist limit would still
 # let a manual refresh and a scheduled one stack on top of each other, which is

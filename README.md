@@ -197,6 +197,21 @@ All config is stored in the Settings UI and persisted to `/data/config.json` ins
 
 > **Note:** Plex Pass is not required. Digarr uses standard Plex API endpoints available to all free accounts.
 
+### Performance tuning
+
+Defaults suit a single instance with a typical Lidarr. Raise them only if you have
+headroom; the point of each is to keep Digarr from overwhelming something downstream.
+
+| Env var | Default | What it controls |
+|---|---|---|
+| `DIGARR_WORKERS` | `1` | Uvicorn worker processes. **The two limits below are per-process**, so running N workers multiplies their effective ceiling by N. Leave at 1 unless you actually need the throughput |
+| `DIGARR_REFRESH_QUEUE_MAX` | `10` | How many refreshes may be pending at once. Refreshes run one at a time; beyond this the request is rejected rather than queued indefinitely |
+| `DIGARR_LIDARR_ADD_CONCURRENCY` | `4` | Concurrent artist adds sent to Lidarr. A single playlist can have dozens of net-new artists and Lidarr does a metadata lookup for each; too many at once and they time out |
+
+Refreshes are serialised: a scheduled run and one you trigger yourself will not
+overlap. The gate is released between playlists, so a manual refresh waits for the
+playlist in progress rather than the whole scheduled backlog.
+
 ---
 
 ## Authentication
