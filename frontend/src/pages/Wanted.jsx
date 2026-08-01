@@ -341,7 +341,77 @@ function ImportBar({ name, placeholder, onNameChange, onImport, importing, count
 // Page
 // ---------------------------------------------------------------------------
 
-export default function Discover() {
+// Albums Lidarr is monitoring but has not downloaded. Lives here rather than on
+// History because it describes what is missing from the library, not what was
+// imported. Loads on demand - it is a report, not something you need on arrival.
+function WantedCard({ configured }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get('/api/lidarr/wanted');
+      setData(res.data);
+    } catch (err) {
+      setData({ error: err.response?.data?.detail || 'Failed to load wanted list.' });
+    }
+    setLoading(false);
+  };
+
+  if (!configured) return null;
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+        <div className="card-title" style={{ marginBottom: 0 }}>Wanted / Missing</div>
+        <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={load} disabled={loading}>
+          {loading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Loading…</> : '↻ Load from Lidarr'}
+        </button>
+      </div>
+      <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
+        Albums Lidarr is monitoring but hasn't downloaded yet.
+      </p>
+      {data?.error && (
+        <div className="alert alert-error" style={{ fontSize: 12 }}>{data.error}</div>
+      )}
+      {data && !data.error && (
+        data.albums?.length > 0 ? (
+          <>
+            <div className="text-muted" style={{ fontSize: 11, marginBottom: '0.4rem' }}>
+              {data.total} album{data.total !== 1 ? 's' : ''} missing across {data.digarr_artist_count} Digarr artists
+            </div>
+            <table className="table" style={{ fontSize: 12 }}>
+              <thead>
+                <tr><th>Artist</th><th>Album</th><th>Released</th></tr>
+              </thead>
+              <tbody>
+                {data.albums.map((a, i) => (
+                  <tr key={i}>
+                    <td className="text-muted">{a.artist || '—'}</td>
+                    <td>{a.title || '—'}</td>
+                    <td className="text-muted">{a.release_date || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <div style={{ fontSize: 12 }}>
+            <div className="text-muted">Nothing missing for your {data.digarr_artist_count} Digarr artists. ✓</div>
+            {data.lidarr_total > 0 && (
+              <div className="text-muted" style={{ fontSize: 11, marginTop: '0.3rem' }}>
+                (Lidarr has {data.lidarr_total} wanted album{data.lidarr_total !== 1 ? 's' : ''} total — none match artists in your playlists)
+              </div>
+            )}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+export default function Wanted() {
   const [config, setConfig] = useState(null);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
 
@@ -360,16 +430,17 @@ export default function Discover() {
     <div className="page">
       <div style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, letterSpacing: '0.04em', marginBottom: '0.25rem' }}>
-          Discover
+          Wanted
         </h1>
         <p className="text-muted" style={{ fontSize: 13 }}>
-          Find new artists and releases to add to your library.
+          What your library is missing, and where to find more.
           Imported playlists refresh automatically and sync to Plex just like any other source.
         </p>
       </div>
 
       {config ? (
         <>
+          <WantedCard configured={!!(config.lidarr_url && config.lidarr_api_key)} />
           <ListenBrainzCard configured={lbConfigured} syncProps={syncProps} />
           <SimilarToLibraryCard configured={similarConfigured} syncProps={syncProps} />
         </>

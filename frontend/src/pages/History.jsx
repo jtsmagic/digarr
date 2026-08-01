@@ -46,9 +46,7 @@ export default function History() {
   const [menuOpenId, setMenuOpenId] = useState(null); // overflow menu open for playlist id
   const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [globalMerge, setGlobalMerge] = useState(false);
-  const [schedulerStatus, setSchedulerStatus] = useState(null);
   const [runningNow, setRunningNow] = useState(false);
-  const [runSummary, setRunSummary] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('digarr_history_collapsed') || '{"static":true}');
@@ -56,12 +54,6 @@ export default function History() {
       return { static: true };
     }
   });
-  const [blocklist, setBlocklist] = useState([]);
-  const [newBlocklistEntry, setNewBlocklistEntry] = useState('');
-  const [blocklistSaving, setBlocklistSaving] = useState(false);
-  const [wantedData, setWantedData] = useState(null);
-  const [wantedLoading, setWantedLoading] = useState(false);
-  const [lidarrConfigured, setLidarrConfigured] = useState(false);
   const [importJobs, setImportJobs] = useState([]);
   const completedJobIds = useRef(new Set());
   const dismissedJobIds = useRef(new Set());
@@ -94,11 +86,8 @@ export default function History() {
     axios.get('/api/navidrome/status').then(r => setNavidromeConfigured(r.data.configured)).catch(() => {});
     axios.get('/api/config').then(r => {
       setTimezone(r.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-      setBlocklist(r.data.artist_blocklist || []);
       setGlobalMerge(r.data.refresh_merge_tracks || false);
-      setLidarrConfigured(!!(r.data.lidarr_url && r.data.lidarr_api_key));
     }).catch(() => {});
-    axios.get('/api/scheduler/status').then(r => setSchedulerStatus(r.data)).catch(() => {});
     axios.get('/api/playlists').then(r => {
       setPlaylists(r.data.playlists);
       setLoading(false);
@@ -152,35 +141,21 @@ export default function History() {
     return () => clearInterval(timer);
   }, [importJobs]);
 
-  const handleRunNow = async () => {
+  // Sweeps every refreshable playlist immediately, regardless of its own
+  // cadence. Per-playlist state lands on the rows themselves, so there is no
+  // separate summary panel to feed.
+  const handleRefreshAll = async () => {
     setRunningNow(true);
-    setRunSummary(null);
     try {
-      const res = await axios.post('/api/scheduler/run-now');
-      setSchedulerStatus(prev => ({ ...prev, last_run: res.data.last_run }));
-      setRunSummary(res.data.summary || []);
-    } catch {}
+      await axios.post('/api/scheduler/run-now');
+      const r = await axios.get('/api/playlists');
+      setPlaylists(r.data.playlists);
+    } catch {
+      /* row-level errors surface on the rows */
+    }
     setRunningNow(false);
   };
 
-  const addToBlocklist = async (name) => {
-    if (!name || blocklist.map(a => a.toLowerCase()).includes(name.toLowerCase())) return;
-    const updated = [...blocklist, name];
-    setBlocklist(updated);
-    setBlocklistSaving(true);
-    try { await axios.post('/api/config', { artist_blocklist: updated }); } catch {}
-    setBlocklistSaving(false);
-  };
-
-  const removeFromBlocklist = async (i) => {
-    const updated = blocklist.filter((_, j) => j !== i);
-    setBlocklist(updated);
-    setBlocklistSaving(true);
-    try { await axios.post('/api/config', { artist_blocklist: updated }); } catch {}
-    setBlocklistSaving(false);
-  };
-
-  // Search modal helpers
   const openSearchModal = (track, playlistId) => {
     setSearchModal({ track, playlistId });
     const q = [track.artist, track.title].filter(Boolean).join(' ');
@@ -282,17 +257,6 @@ const handlePushToSpotify = async (pl) => {
 
   const handleDownloadJSPF = (pl) => {
     window.open(`/api/playlists/${pl.id}/jspf`, '_blank');
-  };
-
-  const handleLoadWanted = async () => {
-    setWantedLoading(true);
-    try {
-      const res = await axios.get('/api/lidarr/wanted');
-      setWantedData(res.data);
-    } catch (err) {
-      setWantedData({ error: err.response?.data?.detail || 'Failed to load wanted list.' });
-    }
-    setWantedLoading(false);
   };
 
   // A media-server sync makes one search per uncached track, which can take
@@ -598,6 +562,9 @@ const handlePushToSpotify = async (pl) => {
       <h1 className="page-title">History</h1>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <p className="page-subtitle" style={{ margin: 0 }}>All your past imports — {playlists.length} total</p>
+        <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={handleRefreshAll} disabled={runningNow}>
+          {runningNow ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Refreshing…</> : '⟳ Refresh All'}
+        </button>
         {jellyfinConfigured && playlists.some(p => p.jellyfin_playlist_id) && (
           <button className="btn btn-ghost" style={{ fontSize: 11, color: '#00a4dc', borderColor: '#00a4dc' }}
             disabled={jellyfinSyncAllLoading} onClick={handleSyncAllJellyfin}>
@@ -658,59 +625,6 @@ const handlePushToSpotify = async (pl) => {
         </div>
       )}
       {navidromeSyncAllResult?.error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{navidromeSyncAllResult.error}</div>}
-
-      {/* Scheduled Refresh panel */}
-      {schedulerStatus && (
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div>
-              <div className="card-title" style={{ marginBottom: '0.2rem' }}>Scheduled Refresh</div>
-              <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
-                Re-fetches each playlist from its source URL, adds new artists to Lidarr, and re-syncs connected media servers. Only applies to playlists with a source URL (not static imports).
-              </p>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem' }}>
-            <div style={{ display: 'flex', gap: '1.5rem', fontSize: 12 }}>
-              <span className="text-muted">
-                Last run: <span style={{ color: 'var(--text)' }}>{fmt(schedulerStatus.last_run)}</span>
-              </span>
-              {schedulerStatus.interval_hours > 0 && (
-                <span className="text-muted">
-                  Next: <span style={{ color: 'var(--text)' }}>{fmt(schedulerStatus.next_run)}</span>
-                </span>
-              )}
-            </div>
-            <button className="btn btn-ghost" onClick={handleRunNow} disabled={runningNow} style={{ fontSize: 12 }}>
-              {runningNow ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Running…</> : '▶ Run Now'}
-            </button>
-          </div>
-          {runSummary?.length > 0 && (() => {
-            const totalNew = runSummary.reduce((n, r) => n + (r.new_artists || 0), 0);
-            const errors = runSummary.filter(r => r.status === 'error');
-            return (
-              <div style={{ marginTop: '0.75rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
-                <div className="text-muted" style={{ fontSize: 11, marginBottom: '0.4rem' }}>
-                  {runSummary.length} playlist{runSummary.length !== 1 ? 's' : ''} · {totalNew} new artist{totalNew !== 1 ? 's' : ''} added
-                  {errors.length > 0 && <span style={{ color: 'var(--red)', marginLeft: 8 }}>{errors.length} error{errors.length !== 1 ? 's' : ''}</span>}
-                </div>
-                <div style={{ display: 'grid', gap: '0.2rem' }}>
-                  {runSummary.map((r, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 12 }}>
-                      <span style={{ color: r.status === 'error' ? 'var(--red)' : r.new_artists > 0 ? 'var(--green)' : 'var(--text-muted)', minWidth: 24 }}>
-                        {r.status === 'error' ? '✕' : r.new_artists > 0 ? `+${r.new_artists}` : '✓'}
-                      </span>
-                      <span>{r.name}</span>
-                      {r.status === 'error' && <span className="text-muted">{r.error}</span>}
-                      {r.status === 'ok' && <span className="text-muted">{r.total_tracks} tracks</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-      )}
 
       {/* Active import jobs */}
       {importJobs.length > 0 && (
@@ -1397,102 +1311,6 @@ const handlePushToSpotify = async (pl) => {
           ))}
         </div>
       )}
-
-      {/* Wanted / Missing — Lidarr only */}
-      {lidarrConfigured && <div className="card" style={{ marginTop: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>Wanted / Missing</div>
-          <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={handleLoadWanted} disabled={wantedLoading}>
-            {wantedLoading ? <><span className="spinner" style={{ width: 10, height: 10 }} /> Loading…</> : '↻ Load from Lidarr'}
-          </button>
-        </div>
-        <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
-          Albums Lidarr is monitoring but hasn't downloaded yet.
-        </p>
-        {wantedData?.error && (
-          <div className="alert alert-error" style={{ fontSize: 12 }}>{wantedData.error}</div>
-        )}
-        {wantedData && !wantedData.error && (
-          wantedData.albums?.length > 0 ? (
-            <>
-              <div className="text-muted" style={{ fontSize: 11, marginBottom: '0.4rem' }}>
-                {wantedData.total} album{wantedData.total !== 1 ? 's' : ''} missing across {wantedData.digarr_artist_count} Digarr artists
-              </div>
-              <table className="table" style={{ fontSize: 12 }}>
-                <thead>
-                  <tr><th>Artist</th><th>Album</th><th>Released</th></tr>
-                </thead>
-                <tbody>
-                  {wantedData.albums.map((a, i) => (
-                    <tr key={i}>
-                      <td className="text-muted">{a.artist || '—'}</td>
-                      <td>{a.title || '—'}</td>
-                      <td className="text-muted">{a.release_date || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          ) : (
-            <div style={{ fontSize: 12 }}>
-              <div className="text-muted">Nothing missing for your {wantedData.digarr_artist_count} Digarr artists. ✓</div>
-              {wantedData.lidarr_total > 0 && (
-                <div className="text-muted" style={{ fontSize: 11, marginTop: '0.3rem' }}>
-                  (Lidarr has {wantedData.lidarr_total} wanted album{wantedData.lidarr_total !== 1 ? 's' : ''} total — none match artists in your playlists)
-                </div>
-              )}
-            </div>
-          )
-        )}
-      </div>}
-
-      {/* Artist Blocklist */}
-      <div className="card" style={{ marginTop: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>Artist Blocklist</div>
-          {blocklistSaving && <span className="text-muted" style={{ fontSize: 11 }}>Saving…</span>}
-        </div>
-        <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
-          Artists on this list are silently skipped during imports and scheduled refreshes.
-        </p>
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          <input
-            value={newBlocklistEntry}
-            onChange={e => setNewBlocklistEntry(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && newBlocklistEntry.trim()) {
-                addToBlocklist(newBlocklistEntry.trim());
-                setNewBlocklistEntry('');
-              }
-            }}
-            placeholder="Artist name to block"
-            style={{ flex: 1 }}
-          />
-          <button className="btn btn-ghost" onClick={() => {
-            addToBlocklist(newBlocklistEntry.trim());
-            setNewBlocklistEntry('');
-          }}>Add</button>
-        </div>
-        {blocklist.length > 0 ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-            {blocklist.map((a, i) => (
-              <span key={i} style={{
-                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)',
-                borderRadius: 4, padding: '3px 8px', fontSize: 12,
-              }}>
-                {a}
-                <button onClick={() => removeFromBlocklist(i)}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}>
-                  ✕
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <span className="text-muted" style={{ fontSize: 12 }}>No artists blocked.</span>
-        )}
-      </div>
 
       {/* ── Manual track search modal ── */}
       {searchModal && (

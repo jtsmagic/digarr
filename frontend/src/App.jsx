@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Link, Navigate } from 'react-router-dom';
 import axios from 'axios';
 import Import from './pages/Import';
 import History from './pages/History';
 import Settings from './pages/Settings';
-import Discover from './pages/Discover';
+import Wanted from './pages/Wanted';
 import Login from './pages/Login';
 import './App.css';
 
@@ -75,7 +75,7 @@ function App() {
             <Link to="/" className="logo" style={{ textDecoration: 'none' }}>
               <span className="logo-icon">⦿</span>
               <span className="logo-text">Digarr</span>
-              <span className="logo-tag">v{process.env.REACT_APP_VERSION || '1.0.1'}</span>
+              <span className="logo-tag">v{process.env.REACT_APP_VERSION || '1.0.2'}</span>
             </Link>
             <nav className="nav">
               {authRequired && (
@@ -103,8 +103,8 @@ function App() {
               <NavLink to="/history" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
                 History
               </NavLink>
-              <NavLink to="/discover" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
-                Discover
+              <NavLink to="/wanted" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
+                Wanted
               </NavLink>
               <NavLink to="/settings" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
                 Settings
@@ -116,7 +116,9 @@ function App() {
           <Routes>
             <Route path="/" element={<Import />} />
             <Route path="/history" element={<History />} />
-            <Route path="/discover" element={<Discover />} />
+            <Route path="/wanted" element={<Wanted />} />
+            {/* Old bookmarks keep working. */}
+            <Route path="/discover" element={<Navigate to="/wanted" replace />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

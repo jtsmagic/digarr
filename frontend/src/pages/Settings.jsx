@@ -3,6 +3,30 @@ import axios from 'axios';
 
 export default function Settings() {
   const [config, setConfig] = useState({});
+  // Blocklist lives here rather than on History: it is configuration, not history.
+  // Kept as its own state because it saves immediately on edit rather than via
+  // the page's Save button.
+  const [blocklist, setBlocklist] = useState([]);
+  const [newBlocklistEntry, setNewBlocklistEntry] = useState('');
+  const [blocklistSaving, setBlocklistSaving] = useState(false);
+
+  const persistBlocklist = async (updated) => {
+    setBlocklist(updated);
+    setBlocklistSaving(true);
+    try {
+      await axios.post('/api/config', { artist_blocklist: updated });
+    } catch {
+      /* leave the optimistic value; the next load will correct it */
+    }
+    setBlocklistSaving(false);
+  };
+
+  const addToBlocklist = (name) => {
+    if (!name || blocklist.map(a => a.toLowerCase()).includes(name.toLowerCase())) return;
+    persistBlocklist([...blocklist, name]);
+  };
+
+  const removeFromBlocklist = (i) => persistBlocklist(blocklist.filter((_, j) => j !== i));
   const [loading, setLoading] = useState(true);
   const [authStatus, setAuthStatus] = useState(null);
   const [newPassword, setNewPassword] = useState('');
@@ -68,6 +92,7 @@ export default function Settings() {
   useEffect(() => {
     axios.get('/api/config').then(r => {
       setConfig(r.data);
+      setBlocklist(r.data.artist_blocklist || []);
       setLoading(false);
     }).catch(() => setLoading(false));
     axios.get('/api/auth/status').then(r => setAuthStatus(r.data)).catch(() => {});
@@ -1111,6 +1136,54 @@ if (loading) {
               onChange={e => handleChange('playlist_export_path', e.target.value)}
               placeholder="/data/playlists" />
           </div>
+        </>}
+      </div>
+
+      {/* Artist Blocklist */}
+      <div className="card">
+        <SectionTitle sectionKey="blocklist">Artist Blocklist <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}>optional — artists to never add</span></SectionTitle>
+        {openSections.has('blocklist') && <>
+          <p className="text-muted" style={{ fontSize: 12, marginBottom: '0.75rem' }}>
+            Artists on this list are silently skipped during imports and scheduled refreshes.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <input
+              value={newBlocklistEntry}
+              onChange={e => setNewBlocklistEntry(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newBlocklistEntry.trim()) {
+                  addToBlocklist(newBlocklistEntry.trim());
+                  setNewBlocklistEntry('');
+                }
+              }}
+              placeholder="Artist name to block"
+              style={{ flex: 1 }}
+            />
+            <button className="btn btn-ghost" onClick={() => {
+              addToBlocklist(newBlocklistEntry.trim());
+              setNewBlocklistEntry('');
+            }}>Add</button>
+            {blocklistSaving && <span className="text-muted" style={{ fontSize: 11, alignSelf: 'center' }}>Saving…</span>}
+          </div>
+          {blocklist.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {blocklist.map((a, i) => (
+                <span key={i} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                  background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)',
+                  borderRadius: 4, padding: '3px 8px', fontSize: 12,
+                }}>
+                  {a}
+                  <button onClick={() => removeFromBlocklist(i)}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}>
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-muted" style={{ fontSize: 12 }}>No artists blocked.</span>
+          )}
         </>}
       </div>
 
