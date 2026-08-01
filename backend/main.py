@@ -123,8 +123,6 @@ from spotify import (
     get_current_user as spotify_get_current_user,
     get_all_playlists, fetch_liked_songs, push_to_spotify,
 )
-from listenbrainz import get_recommendation_playlist as lb_recommendation
-from lastfm import get_similar_artists as lfm_get_similar_artists
 from utils import deduplicate_artists, normalize
 import httpx
 
@@ -555,7 +553,10 @@ def update_config(config: dict):
     _reschedule_navidrome_sync(int(config.get("navidrome_sync_interval_hours") or 0))
     return {"status": "ok"}
 
-REFRESHABLE_TYPES = ("url", "m3u_url", "listenbrainz", "similar", "spotify")
+# "listenbrainz" and "similar" were only ever created from the Discover page,
+# which no longer exists - Lidarr answers "what am I missing" better than a
+# second copy of it here.
+REFRESHABLE_TYPES = ("url", "m3u_url", "spotify")
 
 # Worker wake-up: set this after changing a cadence so the new deadline is
 # picked up immediately instead of on the next periodic re-check.
@@ -1662,50 +1663,6 @@ def get_stats():
 
 
 
-@app.get("/api/lidarr/wanted")
-async def get_wanted_missing():
-    config = load_config()
-    if not config.get("lidarr_url") or not config.get("lidarr_api_key"):
-        raise HTTPException(status_code=400, detail="Lidarr not configured")
-
-    # Build the normalised set of every artist name across all Digarr playlists.
-    # Uses both `artists` (full list) and `artists_added` so we don't miss artists
-    # that were already in the Lidarr library at import time.
-    raw_names = get_all_playlist_artist_names()
-    digarr_artists = {normalize(n) for n in raw_names}
-
-    client = make_lidarr_client(config)
-    try:
-        data = await client.get_wanted_missing(page_size=200)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Lidarr timed out. It may be busy or unreachable.")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"Lidarr returned {e.response.status_code}.")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach Lidarr: {e}")
-
-    records = data.get("records", [])
-
-    albums = []
-    for r in records:
-        artist_name = r.get("artist", {}).get("artistName", "")
-        if normalize(artist_name) not in digarr_artists:
-            continue
-        albums.append({
-            "artist": artist_name,
-            "title": r.get("title", ""),
-            "release_date": (r.get("releaseDate") or "")[:10] or None,
-        })
-
-    return {
-        "total": len(albums),
-        "albums": albums,
-        "lidarr_total": data.get("totalRecords", len(records)),
-        "digarr_artist_count": len(digarr_artists),
-    }
-
-# --- Playlist file export ---
-
 def _safe_filename(name: str) -> str:
     """Convert a playlist name to a safe filename (no special chars, spaces → underscores)."""
     name = re.sub(r'[^\w\s-]', '', name).strip()
@@ -1931,35 +1888,13 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
     source_url = pl.get("source_url")
     source_type = pl.get("source_type")
 
-    if not source_url or source_type not in ("url", "m3u_url", "listenbrainz", "similar", "spotify"):
+    if not source_url or source_type not in REFRESHABLE_TYPES:
         raise ValueError("No refreshable source URL")
 
     new_artists_dicts = []
     new_tracks = []
 
-    if source_type == "listenbrainz":
-        username = config.get("listenbrainz_username", "").strip()
-        if not username:
-            raise ValueError("ListenBrainz username not configured in Settings.")
-        parts = source_url.split(":")  # e.g. "listenbrainz:weekly_jams"
-        playlist_type = parts[1] if len(parts) > 1 else "weekly_jams"
-        data = await lb_recommendation(username, playlist_type)
-        new_artists_dicts = data["artists"]
-        new_tracks = data["tracks"]
-
-    elif source_type == "similar":
-        api_key = config.get("lastfm_api_key", "").strip()
-        if not api_key:
-            raise ValueError("Last.fm API key required for Similar to Library. Add it in Settings.")
-        if not config.get("lidarr_url") or not config.get("lidarr_api_key"):
-            raise ValueError("Lidarr not configured.")
-        all_lidarr = await make_lidarr_client(config).get_all_artists()
-        artist_names = [a.get("artistName", "") for a in all_lidarr if a.get("artistName")]
-        data = await _compute_similar_to_library(api_key, artist_names)
-        new_artists_dicts = data["artists"]
-        new_tracks = data["tracks"]
-
-    elif source_type == "spotify":
+    if source_type == "spotify":
         # source_url is "spotify:{playlist_id}" (from the Spotify tab import)
         sp_playlist_id = source_url.split(":", 1)[1] if ":" in source_url else source_url
         token = await get_oauth_token(config)
@@ -3269,89 +3204,6 @@ async def download_search(body: dict):
 
 # ---------------------------------------------------------------------------
 # Discover endpoints — ListenBrainz & Last.fm
-# ---------------------------------------------------------------------------
-
-_LB_VALID_TYPES = ("weekly_jams", "daily_jams", "weekly_exploration")
-
-@app.get("/api/discover/listenbrainz/recommendations")
-async def discover_lb_recommendations(type: str = "weekly_jams"):
-    if type not in _LB_VALID_TYPES:
-        raise HTTPException(status_code=400, detail=f"type must be one of: {', '.join(_LB_VALID_TYPES)}")
-    config = load_config()
-    username = config.get("listenbrainz_username", "").strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="ListenBrainz username not configured. Add it in Settings.")
-    try:
-        return await lb_recommendation(username, type)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=400, detail=f"ListenBrainz user '{username}' not found.")
-        raise HTTPException(status_code=400, detail=f"ListenBrainz API error ({e.response.status_code})")
-
-
-async def _compute_similar_to_library(api_key: str, library_artist_names: list) -> dict:
-    """
-    Fetch similar artists for up to 75 library artists (semaphore=5),
-    count how many library artists each similar artist appeared for,
-    filter out artists already in the library, return top 50 by count.
-    """
-    import random
-    from collections import Counter
-
-    sample = (
-        random.sample(library_artist_names, 75)
-        if len(library_artist_names) > 75
-        else library_artist_names
-    )
-    library_norm = {normalize(a) for a in library_artist_names}
-    counts: Counter = Counter()
-    sem = asyncio.Semaphore(5)
-
-    async def _fetch_one(artist_name: str):
-        async with sem:
-            try:
-                similar = await lfm_get_similar_artists(api_key, artist_name, limit=15)
-                for s in similar:
-                    name = s["name"]
-                    if normalize(name) not in library_norm:
-                        counts[name] += 1
-            except Exception:
-                pass  # best-effort — unknown artists, rate limits, etc.
-
-    await asyncio.gather(*[_fetch_one(a) for a in sample])
-
-    sorted_artists = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
-    artists = [{"name": name, "similarity_count": count} for name, count in sorted_artists[:50]]
-
-    return {"name": "Similar to Library", "artists": artists, "tracks": []}
-
-
-@app.get("/api/discover/similar-to-library")
-async def discover_similar_to_library():
-    config = load_config()
-    api_key = config.get("lastfm_api_key", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Last.fm API key required. Add it in Settings.")
-    if not config.get("lidarr_url") or not config.get("lidarr_api_key"):
-        raise HTTPException(status_code=400, detail="Lidarr not configured. Add your Lidarr URL and API key in Settings.")
-    try:
-        all_lidarr = await make_lidarr_client(config).get_all_artists()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not reach Lidarr: {e}")
-    artist_names = [a.get("artistName", "") for a in all_lidarr if a.get("artistName")]
-    if not artist_names:
-        raise HTTPException(status_code=400, detail="No artists found in your Lidarr library.")
-    try:
-        return await _compute_similar_to_library(api_key, artist_names)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Similar artist lookup failed: {e}")
-
-
-
-# ---------------------------------------------------------------------------
-# Lidarr webhook
 # ---------------------------------------------------------------------------
 
 async def _rematch_playlist_plex(playlist_id: int) -> None:

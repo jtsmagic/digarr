@@ -29,8 +29,6 @@ DEFAULTS = {
     "spotify_token_expires_at": None,
     "spotify_user_id": "",
     "spotify_display_name": "",
-    "listenbrainz_username": "",
-    "lastfm_api_key": "",
     "refresh_interval_hours": 0,
     "refresh_last_run": None,
     "refresh_last_run_summary": [],
@@ -74,7 +72,6 @@ _ENV_OVERRIDES: dict[str, str] = {
     "plex_token":           "DIGARR_PLEX_TOKEN",
     "spotify_client_id":    "DIGARR_SPOTIFY_CLIENT_ID",
     "spotify_client_secret":"DIGARR_SPOTIFY_CLIENT_SECRET",
-    "lastfm_api_key":       "DIGARR_LASTFM_KEY",
 }
 
 

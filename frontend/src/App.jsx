@@ -4,7 +4,6 @@ import axios from 'axios';
 import Import from './pages/Import';
 import History from './pages/History';
 import Settings from './pages/Settings';
-import Wanted from './pages/Wanted';
 import Login from './pages/Login';
 import './App.css';
 
@@ -103,9 +102,6 @@ function App() {
               <NavLink to="/history" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
                 History
               </NavLink>
-              <NavLink to="/wanted" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
-                Wanted
-              </NavLink>
               <NavLink to="/settings" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
                 Settings
               </NavLink>
@@ -116,9 +112,9 @@ function App() {
           <Routes>
             <Route path="/" element={<Import />} />
             <Route path="/history" element={<History />} />
-            <Route path="/wanted" element={<Wanted />} />
-            {/* Old bookmarks keep working. */}
-            <Route path="/discover" element={<Navigate to="/wanted" replace />} />
+            {/* Discover/Wanted removed - Lidarr already reports what is missing. */}
+            <Route path="/wanted" element={<Navigate to="/history" replace />} />
+            <Route path="/discover" element={<Navigate to="/history" replace />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

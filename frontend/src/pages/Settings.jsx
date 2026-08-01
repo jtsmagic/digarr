@@ -727,39 +727,6 @@ if (loading) {
         </>}
       </div>
 
-      {/* ListenBrainz */}
-      <div className="card">
-        <SectionTitle sectionKey="listenbrainz">ListenBrainz <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}>optional — Discover page</span></SectionTitle>
-        {openSections.has('listenbrainz') && <>
-          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Enter your ListenBrainz username to pull Weekly Jams, Daily Jams, and Weekly Exploration on the Discover page. No API key required.
-          </p>
-          <div className="field">
-            <label>Username</label>
-            <input value={config.listenbrainz_username || ''}
-              onChange={e => handleChange('listenbrainz_username', e.target.value)}
-              placeholder="your ListenBrainz username" style={{ maxWidth: 300 }} />
-          </div>
-        </>}
-      </div>
-
-      {/* Last.fm API Key (Similar to Library) */}
-      <div className="card">
-        <SectionTitle sectionKey="lastfm">Last.fm API Key <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}>optional — Similar to Library</span></SectionTitle>
-        {openSections.has('lastfm') && <>
-          <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Used by the Similar to Library feature on the Discover page to find artists related to your Lidarr library.
-            Get a free key at <strong>last.fm/api/account/create</strong>.
-          </p>
-          <div className="field" style={{ maxWidth: 400 }}>
-            <label>API Key</label>
-            <input type="password" value={config.lastfm_api_key || ''}
-              onChange={e => handleChange('lastfm_api_key', e.target.value)}
-              placeholder="Last.fm API key" />
-          </div>
-        </>}
-      </div>
-
       {/* Plex */}
       <div className="card">
         <SectionTitle sectionKey="plex">Plex</SectionTitle>
