@@ -403,15 +403,39 @@ class LidarrClient:
 
         # Lidarr's /artist/lookup aggregates every installed metadata provider, not just
         # MusicBrainz. Plugin providers return namespaced ids ("12345@deezer") whereas
-        # MusicBrainz returns a bare UUID. Prefer MusicBrainz so a given artist resolves
-        # to one canonical record no matter which provider happens to rank first -
-        # otherwise the same artist can be added twice under two different ids. Fall
-        # back to the top result when MusicBrainz has no entry for the name.
-        top = next(
-            (r for r in results if "@" not in str(r.get("foreignArtistId", ""))),
-            results[0],
-        )
-        logger.info("Lookup top result for %r: %r (id=%s)",
+        # MusicBrainz returns a bare UUID. Two rules, applied in order:
+        #
+        #   1. The result's name must actually match what was asked for. MusicBrainz
+        #      fuzzy-matches nearly any string, so without this a query for an artist it
+        #      does not know returns a confident-looking wrong one ("Angelsaur" ->
+        #      "Angelmark") and we would add that instead.
+        #   2. Among exact matches prefer MusicBrainz, so an artist resolves to one
+        #      canonical record rather than being added twice under two provider ids.
+        norm_query = _normalize(name)
+        exact = [r for r in results
+                 if _normalize(r.get("artistName", "")) == norm_query]
+        top = next((r for r in exact if "@" not in str(r.get("foreignArtistId", ""))),
+                   exact[0] if exact else None)
+
+        if top is None:
+            if _is_cast_playlist(playlist_name):
+                # Cast and musical credits legitimately differ from the track artist
+                # ("Original Broadway Cast of Hamilton" vs "Hamilton"), so trust the
+                # cast-aware ranking above rather than demanding an exact match.
+                top = results[0]
+                logger.info("Cast playlist - accepting inexact match %r for %r",
+                            top.get("artistName"), name)
+            else:
+                logger.info("No exact match for %r (closest: %s) - not adding",
+                            name, [r.get("artistName") for r in results[:3]])
+                return {
+                    "artist": name,
+                    "status": "not_found",
+                    "message": f"No metadata provider returned an exact match for {name}",
+                    "album_monitored": None,
+                }
+
+        logger.info("Lookup match for %r: %r (id=%s)",
                     name, top.get("artistName"), top.get("foreignArtistId"))
 
         payload = {
