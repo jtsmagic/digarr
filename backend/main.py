@@ -2658,6 +2658,11 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
             lidarr = make_lidarr_client(config)
             seen = set()
             tasks = []
+            # Shared for this sync only. Several unmatched albums often belong to
+            # the same artist, and each would otherwise refetch that artist's whole
+            # album list. Scoped per call, so nothing outside this sync can make it
+            # stale.
+            albums_memo = {}
             for track in unmatched:
                 artist = (track.get("artist") or "").strip()
                 album = (track.get("album") or "").strip() or None
@@ -2665,7 +2670,7 @@ async def _do_sync_plex_playlist(pl: dict, plex_client: PlexClient, all_lidarr_a
                 if not artist or key in seen:
                     continue
                 seen.add(key)
-                tasks.append(lidarr.ensure_album_monitored_with_library(artist, album, all_lidarr_artists))
+                tasks.append(lidarr.ensure_album_monitored_with_library(artist, album, all_lidarr_artists, albums_memo))
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
                 if not isinstance(result, BaseException) and result["status"] == "monitored":

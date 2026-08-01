@@ -268,7 +268,7 @@ class LidarrClient:
         norm_map = {_normalize(a.get("artistName", "")): True for a in all_artists}
         return {name: (_normalize(name) in norm_map) for name in names}
 
-    async def _ensure_album_monitored_for_artist(self, artist: dict, album_hint: Optional[str] = None) -> dict:
+    async def _ensure_album_monitored_for_artist(self, artist: dict, album_hint: Optional[str] = None, albums_memo: dict = None) -> dict:
         """
         Given an already-fetched artist dict, ensure the artist and target album are monitored
         and trigger a search. Returns a status dict with keys: status, artist, album.
@@ -284,7 +284,7 @@ class LidarrClient:
             except Exception as exc:
                 logger.error("Failed to re-monitor artist %r: %s", artist_name, exc)
 
-        albums = await self.get_artist_albums(artist_id)
+        albums = await self._albums_for_artist(artist_id, albums_memo)
         if not albums:
             return {"status": "no_albums", "artist": artist_name, "album": None}
 
@@ -325,12 +325,33 @@ class LidarrClient:
             return {"status": "artist_not_found", "artist": artist_name, "album": None}
         return await self._ensure_album_monitored_for_artist(artist, album_hint)
 
-    async def ensure_album_monitored_with_library(self, artist_name: str, album_hint: Optional[str], all_artists: list) -> dict:
-        """Like ensure_album_monitored but uses a pre-fetched library — no extra get_all_artists() call."""
+    async def ensure_album_monitored_with_library(self, artist_name: str, album_hint: Optional[str], all_artists: list, albums_memo: dict = None) -> dict:
+        """Like ensure_album_monitored but uses a pre-fetched library — no extra get_all_artists() call.
+
+        albums_memo, when supplied, is shared across one batch of calls so that
+        several albums by the same artist cost a single album fetch.
+        """
         artist = self._match_in_library(artist_name, all_artists)
         if not artist:
             return {"status": "artist_not_found", "artist": artist_name, "album": None}
-        return await self._ensure_album_monitored_for_artist(artist, album_hint)
+        return await self._ensure_album_monitored_for_artist(artist, album_hint, albums_memo)
+
+
+    async def _albums_for_artist(self, artist_id: int, memo: dict = None) -> list:
+        """Fetch an artist's albums, coalescing concurrent requests for the same artist.
+
+        Callers arrive together via asyncio.gather, so a plain result cache would
+        not help - every one would miss before the first response landed. Storing
+        the in-flight future instead means the first caller starts the request and
+        the rest await that same one.
+        """
+        if memo is None:
+            return await self.get_artist_albums(artist_id)
+        pending = memo.get(artist_id)
+        if pending is None:
+            pending = asyncio.ensure_future(self.get_artist_albums(artist_id))
+            memo[artist_id] = pending
+        return await pending
 
     async def _already_exists_response(self, name: str, existing: dict, album_hint: Optional[str]) -> dict:
         """Build the response for an artist that's already in the library.
