@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
+
+// Manual track matching is an occasional workflow, so its markup and search
+// logic stay out of the initial bundle until someone actually opens it.
+const TrackSearchModal = lazy(() => import('../components/TrackSearchModal'));
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { formatDate } from '../utils';
@@ -60,11 +64,6 @@ export default function History() {
 
   // Manual track matching
   const [searchModal, setSearchModal] = useState(null); // { track, playlistId }
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchSource, setSearchSource] = useState('plex');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchSaved, setSearchSaved] = useState(null); // track key that was just saved
   const [manualMatches, setManualMatches] = useState({}); // { "artist||title" → matched track }
   const [ignoredTracks, setIgnoredTracks] = useState(new Set()); // Set of "artist_lower||title_lower"
   const [expandedIgnored, setExpandedIgnored] = useState({}); // { playlistId → bool }
@@ -156,32 +155,7 @@ export default function History() {
     setRunningNow(false);
   };
 
-  const openSearchModal = (track, playlistId) => {
-    setSearchModal({ track, playlistId });
-    const q = [track.artist, track.title].filter(Boolean).join(' ');
-    setSearchQuery(q);
-    setSearchResults([]);
-    setSearchSaved(null);
-  };
-
-  const closeSearchModal = () => {
-    setSearchModal(null);
-    setSearchQuery('');
-    setSearchResults([]);
-  };
-
-  const runLibrarySearch = async (q, source) => {
-    if (!q || q.trim().length < 2) { setSearchResults([]); return; }
-    setSearchLoading(true);
-    try {
-      const res = await axios.get('/api/library/search', { params: { q: q.trim(), limit: 20, source: source || searchSource } });
-      setSearchResults(res.data.results || []);
-    } catch {
-      setSearchResults([]);
-    } finally {
-      setSearchLoading(false);
-    }
-  };
+  const openSearchModal = (track, playlistId) => setSearchModal({ track, playlistId });
 
   const handleIgnoreTrack = async (track) => {
     const key = `${(track.artist || '').toLowerCase()}||${(track.title || '').toLowerCase()}`;
@@ -219,24 +193,6 @@ export default function History() {
     }
   };
 
-  const confirmManualMatch = async (result) => {
-    if (!searchModal) return;
-    const { track } = searchModal;
-    try {
-      await axios.post('/api/library/manual-match', {
-        artist: track.artist || '',
-        title: track.title || '',
-        external_id: result.external_id,
-        source: result.source || 'plex',
-      });
-      const key = `${(track.artist || '').toLowerCase()}||${(track.title || '').toLowerCase()}`;
-      setManualMatches(prev => ({ ...prev, [key]: result }));
-      setSearchSaved(key);
-      setTimeout(closeSearchModal, 800);
-    } catch {
-      // ignore — modal stays open so user can retry
-    }
-  };
 
 const handlePushToSpotify = async (pl) => {
     setSpotifyPushStates(prev => ({ ...prev, [pl.id]: { loading: true, result: null, error: null } }));
@@ -531,21 +487,6 @@ const handlePushToSpotify = async (pl) => {
       default: return '⦿';
     }
   };
-
-  // Debounce search as the user types or switches source
-  useEffect(() => {
-    if (!searchModal) return;
-    const timer = setTimeout(() => runLibrarySearch(searchQuery, searchSource), 280);
-    return () => clearTimeout(timer);
-  }, [searchQuery, searchSource, searchModal]);
-
-  // Close search modal on Escape
-  useEffect(() => {
-    if (!searchModal) return;
-    const handler = (e) => { if (e.key === 'Escape') closeSearchModal(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [searchModal]);
 
   if (loading) {
     return (
@@ -1174,7 +1115,6 @@ const handlePushToSpotify = async (pl) => {
                                             const titleLower = (t.title || '').toLowerCase();
                                             const matchKey = `${artistLower}||${titleLower}`;
                                             const isMatched = !!manualMatches[matchKey];
-                                            const justSaved = searchSaved === matchKey;
                                             const isIgnored = ignoredTracks.has(matchKey);
                                             const inLidarr = artistLower && (pl.artists_added || []).some(
                                               a => a.toLowerCase() === artistLower
@@ -1198,7 +1138,7 @@ const handlePushToSpotify = async (pl) => {
                                                     >
                                                       Unignore
                                                     </button>
-                                                  ) : isMatched || justSaved ? (
+                                                  ) : isMatched ? (
                                                     <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--font-mono)' }}>
                                                       ✓ matched
                                                     </span>
@@ -1312,97 +1252,16 @@ const handlePushToSpotify = async (pl) => {
         </div>
       )}
 
-      {/* ── Manual track search modal ── */}
       {searchModal && (
-        <div className="modal-overlay" onClick={closeSearchModal}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <div className="modal-title">Find in library</div>
-                <div className="modal-subtitle">
-                  {searchModal.track.artist && searchModal.track.artist !== 'null' ? searchModal.track.artist : ''}
-                  {searchModal.track.artist && searchModal.track.title ? ' — ' : ''}
-                  {searchModal.track.title && searchModal.track.title !== 'null' ? searchModal.track.title : ''}
-                </div>
-              </div>
-              <button className="modal-close" onClick={closeSearchModal}>✕</button>
-            </div>
-
-            <div className="modal-body">
-              {/* Source tabs — shown when multiple libraries are configured */}
-              {(jellyfinConfigured || navidromeConfigured) && (
-                <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem' }}>
-                  {[
-                    { id: 'plex', label: 'Plex', show: true },
-                    { id: 'jellyfin', label: 'Jellyfin', show: jellyfinConfigured },
-                    { id: 'navidrome', label: 'Navidrome', show: navidromeConfigured },
-                  ].filter(t => t.show).map(({ id, label }) => (
-                    <button key={id} className="btn btn-ghost"
-                      style={{ fontSize: 11, padding: '3px 10px', background: searchSource === id ? 'var(--accent)' : 'none', color: searchSource === id ? '#fff' : 'var(--text-muted)', borderColor: searchSource === id ? 'var(--accent)' : 'var(--border)' }}
-                      onClick={() => setSearchSource(id)}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-                <input
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search artist or title…"
-                  autoFocus
-                  style={{ flex: 1 }}
-                />
-                {searchLoading && (
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <span className="spinner" />
-                  </div>
-                )}
-              </div>
-
-              {searchResults.length > 0 ? (
-                <table className="table" style={{ fontSize: 12 }}>
-                  <thead>
-                    <tr><th>Artist</th><th>Title</th><th>Album</th><th style={{ width: 60 }}></th></tr>
-                  </thead>
-                  <tbody>
-                    {searchResults.map((r, i) => (
-                      <tr key={i} style={{ cursor: 'pointer' }} onClick={() => confirmManualMatch(r)}>
-                        <td className="text-muted">{r.artist || '—'}</td>
-                        <td>{r.title || '—'}</td>
-                        <td className="text-muted">{r.album || '—'}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ fontSize: 9, padding: '3px 8px', letterSpacing: 1 }}
-                            onClick={e => { e.stopPropagation(); confirmManualMatch(r); }}
-                          >
-                            Match
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : searchQuery.trim().length >= 2 && !searchLoading ? (
-                <div className="text-muted" style={{ textAlign: 'center', padding: '1.5rem 0' }}>
-                  No tracks found. Try a different search.
-                  <div style={{ marginTop: '0.5rem', fontSize: 11 }}>
-                    If your library cache is empty, refresh it in Settings → {searchSource === 'jellyfin' ? 'Jellyfin' : searchSource === 'navidrome' ? 'Navidrome' : 'Plex'}.
-                  </div>
-                </div>
-              ) : !searchLoading && (
-                <div className="text-muted" style={{ fontSize: 11, textAlign: 'center', padding: '0.5rem 0' }}>
-                  Type to search your music library
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={closeSearchModal}>Cancel</button>
-            </div>
-          </div>
-        </div>
+        <Suspense fallback={null}>
+          <TrackSearchModal
+            track={searchModal.track}
+            jellyfinConfigured={jellyfinConfigured}
+            navidromeConfigured={navidromeConfigured}
+            onClose={() => setSearchModal(null)}
+            onMatched={(key, result) => setManualMatches(prev => ({ ...prev, [key]: result }))}
+          />
+        </Suspense>
       )}
     </div>
   );

@@ -1159,27 +1159,52 @@ if (loading) {
         <SectionTitle sectionKey="refresh">Scheduled Refresh</SectionTitle>
         {openSections.has('refresh') && <>
           <p className="text-muted" style={{ fontSize: 12, marginBottom: '1rem' }}>
-            Automatically re-fetch and update all playlists that have a source URL. New artists are added to Lidarr.
-            Use the History page to run a sweep manually and see results.
+            Re-fetches each playlist from its source and adds any new artists to Lidarr.
+            How often a given playlist is checked is decided per playlist: one that keeps
+            producing new artists stays on a short cycle, one that has gone quiet backs
+            off on its own. The two bounds below are the range it moves between. Pin an
+            individual playlist to a fixed cadence, or to never, from the History page.
           </p>
           <div className="field">
-            <label>Refresh Interval</label>
-            <select value={config.refresh_interval_hours || 0}
-              onChange={e => handleChange('refresh_interval_hours', parseInt(e.target.value))}>
-              <option value={0}>Off</option>
+            <label>Scheduled Refresh</label>
+            <select value={(config.refresh_interval_hours || 0) > 0 ? 'on' : 'off'}
+              onChange={e => handleChange('refresh_interval_hours', e.target.value === 'on' ? 3 : 0)}>
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              Turns automatic refreshing on or off for every playlist at once.
+            </p>
+          </div>
+          <div className="field">
+            <label>Fastest Cadence</label>
+            <select value={config.refresh_adaptive_floor_hours || 1}
+              onChange={e => handleChange('refresh_adaptive_floor_hours', parseFloat(e.target.value))}>
+              <option value={0.5}>Every 30 minutes</option>
               <option value={1}>Every hour</option>
               <option value={2}>Every 2 hours</option>
               <option value={3}>Every 3 hours</option>
-              <option value={4}>Every 4 hours</option>
               <option value={6}>Every 6 hours</option>
-              <option value={8}>Every 8 hours</option>
+            </select>
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              How often a playlist is checked while it is still turning up new artists.
+            </p>
+          </div>
+          <div className="field">
+            <label>Slowest Cadence</label>
+            <select value={config.refresh_adaptive_ceiling_hours || 24}
+              onChange={e => handleChange('refresh_adaptive_ceiling_hours', parseFloat(e.target.value))}>
+              <option value={6}>Every 6 hours</option>
               <option value={12}>Every 12 hours</option>
               <option value={24}>Daily</option>
               <option value={48}>Every 2 days</option>
               <option value={72}>Every 3 days</option>
               <option value={168}>Weekly</option>
-              <option value={336}>Every 2 weeks</option>
             </select>
+            <p className="text-muted" style={{ marginTop: '0.35rem', fontSize: 11 }}>
+              How far a playlist backs off once it stops producing anything new. It
+              returns to the fastest cadence the moment it does.
+            </p>
           </div>
           <div className="field">
             <label>Webhook URL <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— optional</span></label>
