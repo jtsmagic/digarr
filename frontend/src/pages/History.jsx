@@ -51,6 +51,9 @@ export default function History() {
   const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [globalMerge, setGlobalMerge] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
+  // Which artist list an expanded row is showing: { [playlistId]: 'last' | 'all' }.
+  // Defaults to the last refresh so the panel agrees with the row's badge.
+  const [chipView, setChipView] = useState({});
   const [collapsedGroups, setCollapsedGroups] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('digarr_history_collapsed') || '{"static":true}');
@@ -1004,7 +1007,8 @@ const handlePushToSpotify = async (pl) => {
                     )}
                     {(() => {
                       const results = pl.lidarr_results || [];
-                      if (results.length === 0 && !pl.artists_added?.length) return null;
+                      if (results.length === 0 && !pl.artists_added?.length
+                          && !pl.last_refresh_new_artists?.length) return null;
 
                       // Use full lidarr_results if available, otherwise fall back to artists_added list
                       if (results.length > 0) {
@@ -1060,15 +1064,55 @@ const handlePushToSpotify = async (pl) => {
                         );
                       }
 
-                      // Legacy fallback — old imports only stored artists_added
+                      // No per-run detail to show. Two lists are available and they answer
+                      // different questions, so say which one is on screen: the row's badge
+                      // counts the last refresh, while artists_added accumulates for the life
+                      // of the playlist. Showing the latter under a badge reading "0 new" is
+                      // what made this confusing.
+                      const lastList = pl.last_refresh_new_artists;   // null = never recorded
+                      const allList = pl.artists_added || [];
+                      const canSplit = lastList != null;
+                      const view = chipView[pl.id] || (canSplit ? 'last' : 'all');
+                      const shown = view === 'last' ? (lastList || []) : allList;
+                      const tab = (key, label) => (
+                        <button key={key} className="btn btn-ghost"
+                          onClick={() => setChipView(prev => ({ ...prev, [pl.id]: key }))}
+                          style={{
+                            fontSize: 10, padding: '2px 8px',
+                            background: view === key ? 'var(--accent)' : 'none',
+                            color: view === key ? '#fff' : 'var(--text-muted)',
+                            borderColor: view === key ? 'var(--accent)' : 'var(--border)',
+                          }}>
+                          {label}
+                        </button>
+                      );
                       return (
                         <div>
-                          <div className="card-title" style={{ marginBottom: '0.5rem' }}>Artists Added to Lidarr</div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            {pl.artists_added.map((a, i) => (
-                              <span key={i} className="badge badge-added">{a}</span>
-                            ))}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                            <div className="card-title" style={{ marginBottom: 0 }}>Artists Added to Lidarr</div>
+                            {canSplit && (
+                              <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                {tab('last', `last refresh (${(lastList || []).length})`)}
+                                {tab('all', `all time (${allList.length})`)}
+                              </div>
+                            )}
+                            {!canSplit && (
+                              <span className="text-muted" style={{ fontSize: 11 }}>all time ({allList.length})</span>
+                            )}
                           </div>
+                          {shown.length > 0 ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              {shown.map((a, i) => (
+                                <span key={i} className="badge badge-added">{a}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted" style={{ fontSize: 12 }}>
+                              {view === 'last'
+                                ? `Nothing new in the last refresh — ${allList.length} added all time.`
+                                : 'No artists added yet.'}
+                            </span>
+                          )}
                         </div>
                       );
                     })()}
