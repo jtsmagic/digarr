@@ -5,7 +5,9 @@ import asyncio
 import logging
 import httpx
 from typing import Optional
-from utils import normalize as _normalize, is_cast_context as _is_cast_playlist, cast_score as _cast_score
+from utils import (normalize as _normalize, is_cast_context as _is_cast_playlist, cast_score as _cast_score,
+                   acceptable_inexact as _acceptable_inexact,
+                   primary_credit as _primary_credit)
 
 logger = logging.getLogger(__name__)
 
@@ -439,22 +441,37 @@ class LidarrClient:
                    exact[0] if exact else None)
 
         if top is None:
-            if _is_cast_playlist(playlist_name):
-                # Cast and musical credits legitimately differ from the track artist
-                # ("Original Broadway Cast of Hamilton" vs "Hamilton"), so trust the
-                # cast-aware ranking above rather than demanding an exact match.
-                top = results[0]
-                logger.info("Cast playlist - accepting inexact match %r for %r",
-                            top.get("artistName"), name)
-            else:
-                logger.info("No exact match for %r (closest: %s) - not adding",
-                            name, [r.get("artistName") for r in results[:3]])
-                return {
-                    "artist": name,
-                    "status": "not_found",
-                    "message": f"No metadata provider returned an exact match for {name}",
-                    "album_monitored": None,
-                }
+            # No exact match. Accept a near one only when the candidate is
+            # demonstrably the same artist - a credit expansion of the query, or
+            # near-identical to it. This replaces an older rule that accepted
+            # results[0] outright for cast-sounding playlist names; measured over
+            # this library that produced 34 wrong artists to 10 right ones.
+            for r in results:
+                why = _acceptable_inexact(name, r.get("artistName", ""))
+                if why:
+                    top = r
+                    logger.info("Accepting %s %r for %r", why, r.get("artistName"), name)
+                    break
+
+        if top is None:
+            # Still nothing. If the query is a collaboration string, retry with
+            # the first credited artist - 'Bazzi, Camila Cabello' -> 'Bazzi'.
+            # Deliberately a second lookup rather than a rewrite of the original
+            # query, so a name that merely contains a comma is never mangled.
+            first = _primary_credit(name)
+            if first:
+                logger.info("No match for %r - retrying with primary credit %r", name, first)
+                return await self.add_artist(first, album_hint=album_hint,
+                                             _library=_library, playlist_name=playlist_name)
+
+            logger.info("No exact match for %r (closest: %s) - not adding",
+                        name, [r.get("artistName") for r in results[:3]])
+            return {
+                "artist": name,
+                "status": "not_found",
+                "message": f"No metadata provider returned an exact match for {name}",
+                "album_monitored": None,
+            }
 
         logger.info("Lookup match for %r: %r (id=%s)",
                     name, top.get("artistName"), top.get("foreignArtistId"))
