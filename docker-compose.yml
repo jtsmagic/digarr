@@ -13,8 +13,27 @@ services:
       # Extra uvicorn workers duplicate the background refresh worker and add
       # SQLite contention without adding throughput for an I/O-bound app.
       - DIGARR_WORKERS=1
+    networks:
+      - proxy
     restart: unless-stopped
+
+networks:
+  proxy:
+    # Joined, not created: a reverse proxy in front of digarr has to reach the
+    # container by name, which only works if both sit on the same network.
+    # Declaring it keeps `compose up` from quietly attaching to the default
+    # bridge instead and leaving the proxy with nowhere to route.
+    #
+    # Point DIGARR_NETWORK at your own proxy network if it is named differently,
+    # or delete this block to run digarr standalone on the default bridge.
+    name: ${DIGARR_NETWORK:-nginx-proxy-manager_default}
+    external: true
 
 volumes:
   digarr_data:
-
+    # Pinned rather than left to compose. Compose prefixes volume names with the
+    # project name, which defaults to the directory the repo sits in - so cloning
+    # into a differently named directory yields a brand new empty volume and the
+    # config and database look like they vanished. Fixing the name here makes the
+    # data follow the deployment rather than the folder.
+    name: ${DIGARR_DATA_VOLUME:-digarr_digarr_data}
