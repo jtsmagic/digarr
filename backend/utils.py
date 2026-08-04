@@ -45,6 +45,39 @@ def normalize(s: str) -> str:
     return s
 
 
+_LIDARR_COMMON = re.compile(r"(?<!^)\b(?:a|an|the|and|or|of)\b\s*(?!$)", re.I)
+# .NET's \w is Unicode letters, decimal digits, underscore and connector
+# punctuation. Python's \w is wider - it also accepts subscript and other
+# non-decimal numerals - so the categories are spelled out rather than relying
+# on the shorthand.
+_WORD_CATEGORIES = frozenset({"Lu", "Ll", "Lt", "Lm", "Lo", "Nd", "Pc"})
+
+
+def lidarr_clean_name(name: str) -> str:
+    """Reproduce Lidarr's Artists.CleanName for a display name.
+
+    Lidarr resolves a finished download by artist *name*, and the string it
+    compares is CleanName - not the display name, and not normalize() above. Two
+    artist records whose CleanName collides make it raise
+    MultipleArtistsFoundException, which wedges ProcessMonitoredDownloads and
+    every disk command queued behind it, so a duplicate check that wants to
+    prevent that has to predict Lidarr's normalisation rather than its own.
+
+    The rule, derived by comparing against the CleanName Lidarr itself stored for
+    every artist in a production library: fold accents, drop the common words
+    a|an|the|and|or|of but only where they are interior - a leading or trailing
+    one is kept, so "A Tribe Called Quest" -> atribecalledquest and "Empress Of"
+    -> empressof - then remove every character .NET's \\w rejects and lowercase.
+
+    Two names in that library disagree, both degenerate: "H2O" spelled with a
+    subscript, and a name consisting only of punctuation and digits.
+    """
+    s = unicodedata.normalize("NFKD", name or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = _LIDARR_COMMON.sub("", s)
+    return "".join(c for c in s if unicodedata.category(c) in _WORD_CATEGORIES).lower()
+
+
 def deduplicate_artists(artists: list) -> list:
     """Return a list of artist dicts with unique names (case-insensitive)."""
     seen = set()

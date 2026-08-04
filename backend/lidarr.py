@@ -7,7 +7,8 @@ import httpx
 from typing import Optional
 from utils import (normalize as _normalize, is_cast_context as _is_cast_playlist, cast_score as _cast_score,
                    acceptable_inexact as _acceptable_inexact,
-                   primary_credit as _primary_credit)
+                   primary_credit as _primary_credit,
+                   lidarr_clean_name as _lidarr_clean_name)
 
 logger = logging.getLogger(__name__)
 
@@ -217,10 +218,30 @@ class LidarrClient:
         return candidates[0] if candidates else None
 
     def _match_in_library(self, name: str, all_artists: list) -> Optional[dict]:
-        """Check a pre-fetched artist list — no HTTP call."""
+        """Check a pre-fetched artist list — no HTTP call.
+
+        Two normalisations are tried, and a hit on either one counts:
+
+          normalize()         ours. Catches artists Lidarr treats as distinct but a
+                              human would not — accent spellings, '&' against 'and'.
+
+          lidarr_clean_name() Lidarr's. Catches the ones that matter operationally:
+                              names Lidarr cannot tell apart once a download lands.
+                              "Wild Child" and "Wildchild" both clean to wildchild;
+                              ours keeps the space and calls them different artists,
+                              so we would add the second and wedge Lidarr's import
+                              queue with MultipleArtistsFoundException.
+
+        Returning the existing artist on a CleanName collision is deliberate even
+        when the two genuinely are different artists. Lidarr cannot represent that
+        distinction — adding the second record buys nothing and costs the import
+        pipeline.
+        """
         norm = _normalize(name)
+        clean = _lidarr_clean_name(name)
         for a in all_artists:
-            if _normalize(a.get("artistName", "")) == norm:
+            existing = a.get("artistName", "")
+            if _normalize(existing) == norm or _lidarr_clean_name(existing) == clean:
                 return a
         return None
 
@@ -475,6 +496,19 @@ class LidarrClient:
 
         logger.info("Lookup match for %r: %r (id=%s)",
                     name, top.get("artistName"), top.get("foreignArtistId"))
+
+        # The library check at the top of this function ran against the *query*. We
+        # have since resolved a different string — the provider's name for the
+        # artist — and that is the name Lidarr stores and cleans. Re-check it, or a
+        # query that misses can still resolve to a name that collides on arrival.
+        chosen = top.get("artistName", "")
+        if _normalize(chosen) != norm_query:
+            library = _library if _library is not None else await self.get_all_artists()
+            collision = self._match_in_library(chosen, library)
+            if collision:
+                logger.info("Provider name %r for %r collides with existing artist %r — not adding",
+                            chosen, name, collision.get("artistName"))
+                return await self._already_exists_response(name, collision, album_hint)
 
         payload = {
             "artistName": top.get("artistName"),
