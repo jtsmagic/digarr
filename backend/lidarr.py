@@ -38,6 +38,8 @@ class LidarrClient:
         self.metadata_profile_id = metadata_profile_id
         self.root_folder = root_folder
         self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
+        self._excl_cache = None
+        self._excl_cache_at = 0.0
 
     async def _request(self, method: str, path: str, **kwargs) -> dict | list:
         url = f"{self.base_url}/api/v1{path}"
@@ -196,6 +198,41 @@ class LidarrClient:
         except Exception as exc:
             logger.debug("Background re-monitor for album_id=%s failed: %s", album.get("id"), exc)
 
+    # Exclusions change rarely and are read once per album considered, which on a
+    # large refresh is hundreds of reads. Cached on the instance: a client is
+    # built per sync, so the cache is naturally scoped to one refresh and cannot
+    # go stale across them.
+    _EXCLUSION_CACHE_TTL = 60.0
+
+    def _exclusions(self) -> list:
+        now = time.monotonic()
+        if self._excl_cache is not None and (now - self._excl_cache_at) < self._EXCLUSION_CACHE_TTL:
+            return self._excl_cache
+        try:
+            from database import db_get_monitor_exclusions
+            self._excl_cache = db_get_monitor_exclusions()
+        except Exception as exc:
+            # Never let a bad read turn into "monitor everything". An empty list
+            # would silently disable every exclusion, so keep the last known good
+            # set and only start from empty if we have never managed to read one.
+            logger.error("Could not read monitor exclusions (%s) - reusing last known set", exc)
+            self._excl_cache = self._excl_cache or []
+        self._excl_cache_at = now
+        return self._excl_cache
+
+    def _is_excluded(self, artist_name: str, album: dict) -> Optional[dict]:
+        """Return the matching exclusion row, or None. Matches on Lidarr's album
+        id when we have it, falling back to normalised artist+title."""
+        album_id = album.get("id")
+        title_norm = _normalize(album.get("title", ""))
+        artist_norm = _normalize(artist_name)
+        for row in self._exclusions():
+            if album_id and row.get("lidarr_album_id") == album_id:
+                return row
+            if row.get("album_norm") == title_norm and row.get("artist_norm") == artist_norm:
+                return row
+        return None
+
     # Below this many normalised characters a containment test stops meaning
     # anything - "V" is inside almost every title, and matching on it picks an
     # arbitrary album.
@@ -350,6 +387,16 @@ class LidarrClient:
             logger.info("Album hint %r unresolved for %r - skipping album monitoring",
                         album_hint, artist_name)
             return {"status": "album_hint_unresolved", "artist": artist_name, "album": None}
+
+        # Checked before the already-monitored branch as well as before monitoring,
+        # so an excluded album that is still monitored in Lidarr does not get an
+        # AlbumSearch fired at it either. Exclusion means leave it alone entirely.
+        excl = self._is_excluded(artist_name, target)
+        if excl:
+            logger.info("Album %r / %r is excluded (%s) - not monitoring or searching",
+                        artist_name, target.get("title"), excl.get("reason") or excl.get("source"))
+            return {"status": "album_excluded", "artist": artist_name,
+                    "album": target.get("title")}
 
         if target.get("monitored"):
             # Album already monitored. Only search when tracks are actually missing:
@@ -624,6 +671,12 @@ class LidarrClient:
                     album_match_type = "most_recent"
                     if target:
                         logger.info("Using most recent album %r for %r", target.get("title"), name)
+
+                if target and self._is_excluded(name, target):
+                    logger.info("Album %r for newly added %r is excluded - not monitoring",
+                                target.get("title"), name)
+                    target = None
+                    album_match_type = None
 
                 if target:
                     try:

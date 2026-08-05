@@ -3,7 +3,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 DB_PATH = os.environ.get("DB_PATH", "/data/digarr.db")
 
@@ -186,6 +186,39 @@ def init_db():
             updated_at TEXT NOT NULL
         )
     """)
+
+    # --- monitor_exclusions: albums digarr must never monitor or search ---
+    #
+    # Unmonitoring an album in Lidarr is not durable on its own: the next
+    # playlist refresh that names the album monitors it straight back, and if
+    # the album can never be satisfied (its release expects more tracks than
+    # any download provides) it re-grabs on every RSS cycle forever. This is
+    # the record of "leave this one alone", checked before anything is
+    # monitored or searched.
+    #
+    # lidarr_album_id is the reliable key but is not always known at write
+    # time, so normalised names carry the uniqueness constraint and the id is
+    # matched opportunistically.
+    #
+    # expires_at exists so an automatic exclusion is a pause, not a death
+    # sentence - a better release may show up later. NULL means never expires,
+    # which is the default for an exclusion a human added deliberately.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS monitor_exclusions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            lidarr_album_id INTEGER,
+            artist          TEXT NOT NULL DEFAULT '',
+            album           TEXT NOT NULL DEFAULT '',
+            artist_norm     TEXT NOT NULL,
+            album_norm      TEXT NOT NULL,
+            reason          TEXT NOT NULL DEFAULT '',
+            source          TEXT NOT NULL DEFAULT 'manual',
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT,
+            UNIQUE(artist_norm, album_norm)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_monitor_excl_album_id ON monitor_exclusions (lidarr_album_id)")
 
     try:
         c.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
@@ -784,6 +817,70 @@ def db_get_ignored_tracks() -> List[dict]:
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT artist, title, artist_norm, title_norm FROM ignored_tracks ORDER BY ignored_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# monitor_exclusions helpers
+# ---------------------------------------------------------------------------
+
+def db_add_monitor_exclusion(artist: str, album: str, lidarr_album_id: Optional[int] = None,
+                             reason: str = "", source: str = "manual",
+                             expires_at: Optional[str] = None) -> None:
+    """Record an album digarr must not monitor or search.
+
+    Re-adding an existing exclusion refreshes the reason and expiry rather than
+    failing, so the detector can extend an exclusion it still considers valid
+    without needing to delete it first.
+    """
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO monitor_exclusions
+               (lidarr_album_id, artist, album, artist_norm, album_norm,
+                reason, source, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(artist_norm, album_norm) DO UPDATE SET
+               lidarr_album_id = COALESCE(excluded.lidarr_album_id, monitor_exclusions.lidarr_album_id),
+               reason          = excluded.reason,
+               source          = excluded.source,
+               expires_at      = excluded.expires_at""",
+        (lidarr_album_id, artist, album, _norm(artist), _norm(album),
+         reason, source, now, expires_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_remove_monitor_exclusion(artist: str, album: str) -> None:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "DELETE FROM monitor_exclusions WHERE artist_norm = ? AND album_norm = ?",
+        (_norm(artist), _norm(album)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_monitor_exclusions(include_expired: bool = False) -> List[dict]:
+    """Active exclusions, newest first. Expired rows are filtered, not deleted -
+    keeping them means the detector can see it already tried this album."""
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if include_expired:
+        c.execute("SELECT * FROM monitor_exclusions ORDER BY created_at DESC")
+    else:
+        c.execute(
+            "SELECT * FROM monitor_exclusions WHERE expires_at IS NULL OR expires_at > ? "
+            "ORDER BY created_at DESC",
+            (now,),
+        )
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]

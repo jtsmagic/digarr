@@ -59,6 +59,8 @@ from database import (
     db_set_manual_match, db_get_manual_matches, _norm as _db_norm,
     # ignored tracks
     db_ignore_track, db_unignore_track, db_get_ignored_tracks,
+    # monitor exclusions
+    db_add_monitor_exclusion, db_remove_monitor_exclusion, db_get_monitor_exclusions,
     # download client caches
     db_upsert_download_search_cache, db_get_download_search_cache,
     db_upsert_download_queue_cache, db_get_download_queue_cache,
@@ -3263,6 +3265,43 @@ async def unignore_track(body: dict):
     artist = (body.get("artist") or "").strip()
     title = (body.get("title") or "").strip()
     db_unignore_track(artist, title)
+    return {"status": "ok"}
+
+
+@app.get("/api/lidarr/exclusions")
+async def get_monitor_exclusions(include_expired: bool = False):
+    return {"exclusions": db_get_monitor_exclusions(include_expired=include_expired)}
+
+
+@app.post("/api/lidarr/exclusions")
+async def add_monitor_exclusion(body: dict):
+    """Mark an album digarr must never monitor or search.
+
+    Used both by a human ruling an album out and by the auto-exclude detector,
+    which is why source and expires_at are settable: an automatic exclusion is
+    a pause that lapses, a manual one stands until removed.
+    """
+    artist = (body.get("artist") or "").strip()
+    album = (body.get("album") or "").strip()
+    if not artist or not album:
+        raise HTTPException(status_code=400, detail="artist and album are required")
+    db_add_monitor_exclusion(
+        artist, album,
+        lidarr_album_id=body.get("lidarr_album_id"),
+        reason=(body.get("reason") or "").strip(),
+        source=(body.get("source") or "manual").strip(),
+        expires_at=body.get("expires_at"),
+    )
+    return {"status": "ok"}
+
+
+@app.delete("/api/lidarr/exclusions")
+async def remove_monitor_exclusion(body: dict):
+    artist = (body.get("artist") or "").strip()
+    album = (body.get("album") or "").strip()
+    if not artist or not album:
+        raise HTTPException(status_code=400, detail="artist and album are required")
+    db_remove_monitor_exclusion(artist, album)
     return {"status": "ok"}
 
 
