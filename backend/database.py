@@ -1135,6 +1135,44 @@ def db_delete_refresh_job(playlist_id: int) -> None:
     conn.close()
 
 
+def db_fail_running_refresh_jobs(
+    error: str = "Refresh was interrupted before it finished and did not complete.",
+) -> int:
+    """Mark every refresh job left mid-flight as failed. Returns how many.
+
+    A refresh job only leaves 'running' when the task owning it finishes, and
+    that task lives in the process. So a row still marked running at startup
+    belongs to a task that no longer exists - a restart or crash killed it.
+    Nothing else ever clears these, which makes them permanent: the UI restores
+    a spinner for every id in db_get_running_refresh_playlist_ids() on load, so
+    one interrupted refresh leaves a playlist spinning forever. One was found
+    still 'running' three days and several restarts after the fact.
+
+    Failed rather than deleted so the reason survives. The status endpoint
+    returns job["error"] for a failed job, so the UI can say the refresh was
+    interrupted instead of the bare "no refresh job found" a delete would give.
+    """
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT playlist_id, job_json FROM refresh_jobs WHERE status = 'running'"
+    ).fetchall()
+    for row in rows:
+        try:
+            job = json.loads(row["job_json"])
+        except (ValueError, TypeError):
+            job = {}
+        job["status"] = "error"
+        job["error"] = error
+        conn.execute(
+            "UPDATE refresh_jobs SET job_json = ?, status = 'error' WHERE playlist_id = ?",
+            (json.dumps(job), row["playlist_id"]),
+        )
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
 def db_get_running_refresh_playlist_ids() -> list[int]:
     conn = get_db()
     rows = conn.execute("SELECT playlist_id FROM refresh_jobs WHERE status = 'running'").fetchall()

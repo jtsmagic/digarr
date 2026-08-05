@@ -113,6 +113,7 @@ from database import (
     db_increment_stat, db_set_stat_text, db_set_stat_text_if_unset, db_get_all_stats,
     try_claim_refresh, clear_refresh_lock,
     db_save_refresh_job, db_load_refresh_job, db_get_running_refresh_playlist_ids,
+    db_fail_running_refresh_jobs,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -241,6 +242,13 @@ async def auth_middleware(request: Request, call_next):
 async def startup():
     init_db()
     db_prune_expired_sessions()
+    # A refresh running at shutdown cannot survive it - the task was in this
+    # process. Fail those rows now, or the UI restores a spinner for them on
+    # every load and never stops.
+    interrupted = db_fail_running_refresh_jobs()
+    if interrupted:
+        logger.warning("Marked %d refresh job(s) interrupted by a previous shutdown as failed",
+                       interrupted)
     # Recover persisted jobs; drop mid-flight ones (unrecoverable) and stale done/error ones
     from datetime import timezone, timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
