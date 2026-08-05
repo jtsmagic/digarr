@@ -196,16 +196,37 @@ class LidarrClient:
         except Exception as exc:
             logger.debug("Background re-monitor for album_id=%s failed: %s", album.get("id"), exc)
 
+    # Below this many normalised characters a containment test stops meaning
+    # anything - "V" is inside almost every title, and matching on it picks an
+    # arbitrary album.
+    _HINT_MIN_OVERLAP = 5
+
     def _find_album_by_hint(self, albums: list, hint: str) -> Optional[dict]:
         norm = _normalize(hint)
         for album in albums:
             if _normalize(album.get("title", "")) == norm:
                 return album
-        # Partial match fallback
+
+        # Partial match fallback, in both directions. MusicBrainz hints are
+        # routinely longer than the album Lidarr holds - an "<album>: <edition
+        # subtitle>" hint against a plain "<album>" - so testing only
+        # hint-inside-title misses the obvious match and drops the caller into a
+        # fallback that picks an unrelated album.
+        best = None
+        best_len = 0
         for album in albums:
-            if norm in _normalize(album.get("title", "")):
-                return album
-        return None
+            title = _normalize(album.get("title", ""))
+            if not title:
+                continue
+            shorter, longer = (title, norm) if len(title) <= len(norm) else (norm, title)
+            if len(shorter) < self._HINT_MIN_OVERLAP or shorter not in longer:
+                continue
+            # Prefer the longest title that matches: a hint naming a deluxe or
+            # expanded edition should not settle for a short title that happens
+            # to be a substring of it.
+            if len(title) > best_len:
+                best, best_len = album, len(title)
+        return best
 
     def _most_recent_album(self, albums: list) -> Optional[dict]:
         """Return the most recently released non-single album, or any album if none found."""
@@ -311,13 +332,24 @@ class LidarrClient:
         if not albums:
             return {"status": "no_albums", "artist": artist_name, "album": None}
 
-        target = None
-        if album_hint:
-            target = self._find_album_by_hint(albums, album_hint)
+        # Deliberately no most-recent fallback here. This path only ever runs for
+        # artists already in the library, so an unresolvable hint means we do not
+        # know which album the playlist track belongs to - and the artist's newest
+        # release is not a guess, it is an unrelated album. That fallback silently
+        # re-monitored albums that had been deliberately unmonitored and sent
+        # Lidarr back into a re-grab loop: a decades-old single MusicBrainz
+        # could not match would monitor the artist's newest album. add_artist()
+        # still falls back, where "newest release" is a fair default for an artist
+        # we have only just added.
+        if not album_hint:
+            logger.info("No album hint for %r - skipping album monitoring", artist_name)
+            return {"status": "no_album_hint", "artist": artist_name, "album": None}
+
+        target = self._find_album_by_hint(albums, album_hint)
         if not target:
-            target = self._most_recent_album(albums)
-        if not target:
-            return {"status": "album_not_found", "artist": artist_name, "album": None}
+            logger.info("Album hint %r unresolved for %r - skipping album monitoring",
+                        album_hint, artist_name)
+            return {"status": "album_hint_unresolved", "artist": artist_name, "album": None}
 
         if target.get("monitored"):
             # Album already monitored. Only search when tracks are actually missing:
