@@ -238,6 +238,25 @@ class LidarrClient:
     # arbitrary album.
     _HINT_MIN_OVERLAP = 5
 
+    async def _set_artist_monitored(self, artist_id: int, artist_name: str) -> bool:
+        """Monitor an artist via the bulk editor endpoint. Returns True on success.
+
+        Deliberately NOT `PUT /artist/{id}` with the full object. Lidarr treats any
+        full-object artist PUT as a possible path change and queues a MoveArtist even
+        when sourcePath == destinationPath. Lidarr serialises disk-access commands, so
+        one of those per added artist is enough to starve imports on a busy instance.
+
+        The editor endpoint sets the flag with no MoveArtist queued, and unlike the
+        full-object PUT it reliably sticks - the full-object path often came back with
+        monitored still false, leaving the artist unmonitored anyway.
+        """
+        try:
+            await self._put("/artist/editor", {"artistIds": [artist_id], "monitored": True})
+            return True
+        except Exception as exc:
+            logger.error("Failed to monitor artist %r via editor: %s", artist_name, exc)
+            return False
+
     def _find_album_by_hint(self, albums: list, hint: str) -> Optional[dict]:
         norm = _normalize(hint)
         for album in albums:
@@ -360,10 +379,7 @@ class LidarrClient:
         # Ensure the artist itself is monitored, otherwise Lidarr won't import downloads
         if not artist.get("monitored"):
             logger.warning("ensure_album_monitored: artist %r is unmonitored — fixing", artist_name)
-            try:
-                await self._put(f"/artist/{artist_id}", {**artist, "monitored": True})
-            except Exception as exc:
-                logger.error("Failed to re-monitor artist %r: %s", artist_name, exc)
+            await self._set_artist_monitored(artist_id, artist_name)
 
         albums = await self._albums_for_artist(artist_id, albums_memo)
         if not albums:
@@ -640,12 +656,10 @@ class LidarrClient:
                     name, artist_id, is_monitored)
 
         if artist_id and not is_monitored:
-            logger.warning("Artist %r came back unmonitored — sending follow-up PUT to fix", name)
-            try:
-                result = await self._put(f"/artist/{artist_id}", {**result, "monitored": True})
-                logger.info("Artist %r monitored corrected to %s", name, result.get("monitored"))
-            except Exception as exc:
-                logger.error("Failed to re-monitor artist %r: %s", name, exc)
+            logger.warning("Artist %r came back unmonitored — correcting", name)
+            if await self._set_artist_monitored(artist_id, name):
+                result["monitored"] = True
+                logger.info("Artist %r monitored corrected", name)
 
         # --- album monitoring ---
         album_monitored = None
