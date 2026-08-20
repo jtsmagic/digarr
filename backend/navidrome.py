@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 import httpx
 
 from utils import normalize as _normalize
+from utils import strip_year_suffix as _strip_year_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,22 @@ class NavidromeClient:
     async def search_track(self, artist: str, title: str) -> Optional[str]:
         if not title:
             return None
+        match = await self._search_once(artist, title)
+        if match is not None:
+            return match
+        # Subsonic search3 ANDs its query tokens, so a year tag carried over from
+        # the source matches nothing at all - the library holds no "83" for
+        # "Little Red Corvette (83)" to hit, and the search comes back empty.
+        # normalize() strips punctuation but keeps digits, so even a lucky result
+        # would fail every comparison below. Retrying without the tag, rather than
+        # stripping it up front, leaves a title that genuinely ends in a
+        # parenthesised number - and the exact match it would have made - alone.
+        bare = _strip_year_suffix(title)
+        if bare and bare != title:
+            return await self._search_once(artist, bare)
+        return None
+
+    async def _search_once(self, artist: str, title: str) -> Optional[str]:
         title_norm = _normalize(title)
         artist_norm = _normalize(artist)
 

@@ -45,6 +45,17 @@ def normalize(s: str) -> str:
     return s
 
 
+# xmplaylist tags the titles on some channels with the year the record charted
+# or the production opened - "Little Red Corvette (83)" on 80s on 8, "La Vie
+# Boheme (1996)" on On Broadway. Both the two- and four-digit forms show up.
+_YEAR_SUFFIX_RE = re.compile(r"\s*\((?:19|20)?\d{2}\)\s*$")
+
+
+def strip_year_suffix(title: str) -> str:
+    """Drop a trailing year tag like "(84)" or "(1996)" from a track title."""
+    return _YEAR_SUFFIX_RE.sub("", title or "").strip()
+
+
 _LIDARR_COMMON = re.compile(r"(?<!^)\b(?:a|an|the|and|or|of)\b\s*(?!$)", re.I)
 # .NET's \w is Unicode letters, decimal digits, underscore and connector
 # punctuation. Python's \w is wider - it also accepts subscript and other
