@@ -56,6 +56,56 @@ def strip_year_suffix(title: str) -> str:
     return _YEAR_SUFFIX_RE.sub("", title or "").strip()
 
 
+# A trailing bare "v"/"p" is a performer-credit marker left over from how some
+# sources write 1940s big-band billing - "Glenn Miller v Ray Eberle" is vocal by,
+# "Freddy Martin p Jack Fina" is piano by - not part of the artist's name.
+_CREDIT_SUFFIX_RE = re.compile(r"\s+[vp]\.?$", re.I)
+
+
+def strip_credit_suffix(artist: str) -> str:
+    """Drop a dangling "v"/"p" performer-credit marker from an artist name."""
+    return _CREDIT_SUFFIX_RE.sub("", artist or "").strip()
+
+
+def normalize_extraction(data: dict) -> dict:
+    """Clean performer-credit artefacts out of an AI extraction result.
+
+    A record billed as "Bandleader v Vocalist" reads as two performers, and the
+    extraction then emits the same title once per name - so the playlist repeats the
+    song back to back, and the second entry, having an artist the library never
+    matches, falls through to a title-only match on an unrelated recording.
+
+    The prompt asks for one track per airing, but the model only mostly complies -
+    measured across runs it still split some - so the guarantee lives here instead.
+
+    Consecutive runs of a title collapse to their first entry. Consecutive only, and
+    deliberately so: a station really can play a song twice in an hour, but those
+    plays have other tracks between them. Two in a row is a split credit or a
+    double-logged play, and either way belongs in the playlist once.
+    """
+    artists, seen = [], set()
+    for a in data.get("artists") or []:
+        name = strip_credit_suffix(a.get("name", "")) if isinstance(a, dict) else strip_credit_suffix(a)
+        if not name:
+            continue
+        key = normalize(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        artists.append({**a, "name": name} if isinstance(a, dict) else name)
+
+    tracks = []
+    for t in data.get("tracks") or []:
+        if not isinstance(t, dict):
+            continue
+        title = (t.get("title") or "").strip()
+        if title and tracks and normalize(title) == normalize(tracks[-1].get("title") or ""):
+            continue
+        tracks.append({**t, "artist": strip_credit_suffix(t.get("artist", "")), "title": title})
+
+    return {**data, "artists": artists, "tracks": tracks}
+
+
 _LIDARR_COMMON = re.compile(r"(?<!^)\b(?:a|an|the|and|or|of)\b\s*(?!$)", re.I)
 # .NET's \w is Unicode letters, decimal digits, underscore and connector
 # punctuation. Python's \w is wider - it also accepts subscript and other

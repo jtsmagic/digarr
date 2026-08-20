@@ -5,6 +5,7 @@ from openai import OpenAI, APIStatusError, APIConnectionError
 
 from ai.claude import SYSTEM_PROMPT
 from ai.errors import AIProviderError, friendly_status_message
+from utils import normalize_extraction
 
 
 class OpenAIProvider:
@@ -42,6 +43,8 @@ class OpenAIProvider:
             data = json.loads(response_text)
         except json.JSONDecodeError:
             data = {"artists": [], "tracks": []}
+
+        data = normalize_extraction(data)
 
         input_tokens = response.usage.prompt_tokens
         output_tokens = response.usage.completion_tokens

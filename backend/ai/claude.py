@@ -4,6 +4,7 @@ import json
 import re
 
 from ai.errors import AIProviderError, friendly_status_message
+from utils import normalize_extraction
 
 SYSTEM_PROMPT = """You are a music data extraction assistant for Digarr, a tool that imports music into Lidarr.
 
@@ -28,6 +29,11 @@ Rules:
 - Ignore non-music content
 - album can be null if not mentioned
 - Clean up artist/track names (proper capitalization, remove feat. clutter if needed)
+- A performer credit joined by a bare "v" or "v." (vocal by), or "p" / "p." (piano by), is ONE
+  track and one artist, not several: "Glenn Miller v Ray Eberle" is a single Glenn Miller
+  recording with Ray Eberle on vocals, and "Glenn Miller v Ray Eberle Modernaires" is still
+  that same one track. Credit it to the leading artist and drop the credit suffix. Never emit
+  one track per named performer - that makes the same title repeat back to back.
 - If the content has no music data at all, return {"artists": [], "tracks": []}
 - confidence is an integer 0-100 reflecting how certain you are this is a real artist/track:
   - 90-100: explicit, unambiguous music content
@@ -73,6 +79,8 @@ class ClaudeProvider:
             data = json.loads(response_text)
         except json.JSONDecodeError:
             data = {"artists": [], "tracks": []}
+
+        data = normalize_extraction(data)
 
         input_tokens = message.usage.input_tokens
         output_tokens = message.usage.output_tokens
