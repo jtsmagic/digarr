@@ -2996,8 +2996,13 @@ async def _do_sync_navidrome_playlist(pl: dict, nd: NavidromeClient, config: dic
         await nd.update_playlist(pl["navidrome_playlist_id"], nd_name, matched_ids)
         navidrome_playlist_id = pl["navidrome_playlist_id"]
     else:
-        if not matched_ids:
-            raise ValueError("No tracks matched in Navidrome — cannot create playlist.")
+        # Created even when nothing matched. The Navidrome playlist id is what
+        # enrols a playlist in the scheduled sync - both sync-all paths select on
+        # it - and the id is only ever earned by a successful sync. So refusing to
+        # create one on a zero-match run locked the playlist out of every future
+        # sync permanently, with no way back except another manual click. An empty
+        # playlist is a state the rest of the code already handles: update_playlist
+        # takes an empty track list and clears the remote playlist the same way.
         navidrome_playlist_id = await nd.create_playlist(nd_name, matched_ids)
     update_playlist_navidrome_result(playlist_id, navidrome_playlist_id, len(matched_ids), total)
     return {
