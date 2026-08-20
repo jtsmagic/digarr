@@ -7,6 +7,8 @@ import secrets
 import httpx
 from datetime import datetime, timedelta, timezone
 
+from utils import strip_year_suffix
+
 logger = logging.getLogger(__name__)
 
 PLAYLIST_RE = re.compile(r"open\.spotify\.com/playlist/([A-Za-z0-9]+)")
@@ -332,6 +334,26 @@ async def get_all_playlists(token: str) -> list[dict]:
 
 async def _search_track_uri(artist: str, title: str, client: httpx.AsyncClient, headers: dict) -> str | None:
     """Search Spotify for a track, return its URI or None."""
+    uri = await _search_exact(artist, title, client, headers)
+    if uri:
+        return uri
+    # `track:"..."` is an exact phrase match, so a year tag carried over from the
+    # source - "Little Red Corvette (83)" - matches nothing at all. Retrying
+    # without it, rather than stripping it up front, leaves a title that genuinely
+    # ends in a parenthesised number alone. Measured against the live API on the
+    # channels that carry the tag: 2/24 matched before, 24/24 after.
+    #
+    # Deliberately still the strict quoted form. Looser queries do find a few more
+    # on the sparser channels, but an unquoted or free-text search drops other
+    # playlists (one measured 25/25 -> 18/25), and dropping the artist term entirely
+    # returns confident matches on the wrong recording.
+    bare = strip_year_suffix(title)
+    if bare and bare != title:
+        return await _search_exact(artist, bare, client, headers)
+    return None
+
+
+async def _search_exact(artist: str, title: str, client: httpx.AsyncClient, headers: dict) -> str | None:
     q = f'track:"{title}" artist:"{artist}"'
     r = await client.get(
         "https://api.spotify.com/v1/search",
