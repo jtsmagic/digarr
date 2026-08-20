@@ -355,12 +355,23 @@ async def _search_track_uri(artist: str, title: str, client: httpx.AsyncClient, 
 
 async def _search_exact(artist: str, title: str, client: httpx.AsyncClient, headers: dict) -> str | None:
     q = f'track:"{title}" artist:"{artist}"'
-    r = await client.get(
-        "https://api.spotify.com/v1/search",
-        headers=headers,
-        params={"q": q, "type": "track", "limit": 1, "market": "US"},
-    )
-    if r.status_code != 200:
+    try:
+        r = await _spotify_get(
+            client,
+            "https://api.spotify.com/v1/search",
+            headers=headers,
+            params={"q": q, "type": "track", "limit": 1, "market": "US"},
+        )
+    except httpx.HTTPStatusError as exc:
+        # A rate-limited search used to come back indistinguishable from "no such
+        # track", and push_to_spotify REPLACES the playlist contents - so a throttled
+        # run quietly overwrote the playlist with whatever few tracks happened to get
+        # through. Let a 429 that survives _spotify_get's retries propagate instead:
+        # the push fails, and the playlist is left as it was.
+        if exc.response.status_code == 429:
+            raise
+        # Anything else stays per-track and non-fatal, as before, but is no longer silent.
+        logger.warning("Spotify search failed for %r / %r: %s", artist, title, exc)
         return None
     items = r.json().get("tracks", {}).get("items", [])
     return items[0]["uri"] if items else None
