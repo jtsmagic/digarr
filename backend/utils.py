@@ -106,6 +106,24 @@ def normalize_extraction(data: dict) -> dict:
     return {**data, "artists": artists, "tracks": tracks}
 
 
+def artists_from_tracks(tracks: list) -> list:
+    """Unique artist dicts from track rows, secondary credits included.
+
+    A track row names a single primary artist so a playlist gets one entry per
+    airing, but everyone credited on the record still belongs in the library - so
+    the extras ride along on the row and are collected here rather than by giving
+    each performer a row of their own.
+    """
+    out = {}
+    for t in tracks or []:
+        names = [t.get("artist")] + list(t.get("extra_artists") or [])
+        for name in names:
+            name = (name or "").strip()
+            if name and name not in out:
+                out[name] = {"name": name}
+    return list(out.values())
+
+
 _LIDARR_COMMON = re.compile(r"(?<!^)\b(?:a|an|the|and|or|of)\b\s*(?!$)", re.I)
 # .NET's \w is Unicode letters, decimal digits, underscore and connector
 # punctuation. Python's \w is wider - it also accepts subscript and other

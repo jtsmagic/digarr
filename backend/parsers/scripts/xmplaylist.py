@@ -26,6 +26,7 @@ import html
 import re
 
 from parsers.text import fetch_raw_html
+from utils import strip_credit_suffix
 
 URL_PATTERN = r"https?://(www\.)?xmplaylist\.com/station/"
 
@@ -76,13 +77,26 @@ async def parse(url: str) -> list[dict]:
 
         title = _strip_tags(title_m.group(1))
         artists = [_strip_tags(li) for li in re.findall(r"<li[^>]*>(.*?)</li>", artists_ul_m.group(1), re.S)]
+        artists = [strip_credit_suffix(a) for a in artists]
         artists = [a for a in artists if a]
         if not title or not artists:
             continue
 
-        # One row per artist on a collab track — Digarr's track schema is
-        # single-artist-per-row.
-        for artist in artists:
-            tracks.append({"artist": artist, "title": title, "album": None})
+        # One row per ARTICLE, not per artist. xmplaylist gives every credited
+        # performer its own <li> - a collab's featured artist, and on the vintage
+        # stations the "Bandleader v Vocalist" (vocal by) and "p" (piano by)
+        # billing - so a row per <li> turned one airing into one entry per name and
+        # the playlist repeated the song back to back. Worse, the extra rows carry
+        # an artist the library cannot match, so they fell through to a title-only
+        # match and landed on an unrelated recording of the same name.
+        #
+        # The first <li> is the billing the record is filed under. The rest ride
+        # along on the row so they still reach the library via artists_from_tracks.
+        tracks.append({
+            "artist": artists[0],
+            "title": title,
+            "album": None,
+            "extra_artists": artists[1:],
+        })
 
     return tracks

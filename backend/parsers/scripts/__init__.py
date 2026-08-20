@@ -11,7 +11,11 @@ Drop a .py file in this directory to add one. It must define:
     async def parse(url: str) -> list[dict]:
         # Fetch/scrape `url` however this site needs (raw HTML, a JSON API,
         # etc.) and return a list of {"artist": str, "title": str,
-        # "album": str | None} dicts — one per track. Return [] (not an
+        # "album": str | None} dicts — one per TRACK, not one per credited
+        # performer: a row per performer repeats the track in every synced
+        # playlist. Name the primary artist and put any further credits in an
+        # optional "extra_artists": list[str], which still reach the library.
+        # Return [] (not an
         # exception) if the site is unreachable/empty; the caller treats a
         # too-short result as a failure rather than wiping a playlist.
 

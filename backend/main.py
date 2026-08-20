@@ -126,7 +126,7 @@ from spotify import (
     get_current_user as spotify_get_current_user,
     get_all_playlists, fetch_liked_songs, push_to_spotify,
 )
-from utils import deduplicate_artists, normalize
+from utils import deduplicate_artists, normalize, artists_from_tracks
 import httpx
 
 def _real_ip(request: Request) -> str:
@@ -1469,7 +1469,7 @@ async def parse_input(request: Request, req: ParseRequest):
                     status_code=502,
                     detail="Site script returned too few tracks — the site may have changed or blocked the request.",
                 )
-            artists = list({t["artist"]: {"name": t["artist"]} for t in tracks if t.get("artist")}.values())
+            artists = artists_from_tracks(tracks)
             return {
                 "artists": artists,
                 "tracks": tracks,
@@ -2019,12 +2019,12 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
                         "— site may have changed or blocked the request; refresh aborted "
                         "to avoid wiping the playlist's real content."
                     )
-                new_artists_dicts = list({t["artist"]: {"name": t["artist"]} for t in new_tracks if t.get("artist")}.values())
+                new_artists_dicts = artists_from_tracks(new_tracks)
             else:
                 content = await fetch_url_content(source_url)
                 if source_type == "m3u_url" or content.strip().startswith("#EXTM3U"):
                     new_tracks = parse_m3u_content(content)
-                    new_artists_dicts = list({t["artist"]: {"name": t["artist"]} for t in new_tracks if t.get("artist")}.values())
+                    new_artists_dicts = artists_from_tracks(new_tracks)
                 else:
                     ai = make_ai_provider(config)
                     result = await ai.extract_artists_and_tracks(content)
