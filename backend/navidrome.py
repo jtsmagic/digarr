@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 _API_VERSION = "1.16.1"
 _CLIENT_NAME = "digarr"
 
+# Subsonic error code for "the requested data was not found".
+_NOT_FOUND = 70
+
+
+class SubsonicError(ValueError):
+    """A non-ok Subsonic response. Subclasses ValueError so existing callers
+    that catch ValueError keep working; `code` lets new ones tell a missing
+    playlist apart from a real failure."""
+
+    def __init__(self, code, message: str):
+        self.code = int(code) if str(code).isdigit() else None
+        super().__init__(f"Subsonic error {code}: {message}")
+
 
 class NavidromeClient:
     def __init__(self, base_url: str, username: str, password: str):
@@ -43,9 +56,7 @@ class NavidromeClient:
         body = r.json().get("subsonic-response", {})
         if body.get("status") != "ok":
             err = body.get("error", {})
-            raise ValueError(
-                f"Subsonic error {err.get('code', '?')}: {err.get('message', 'unknown')}"
-            )
+            raise SubsonicError(err.get("code", "?"), err.get("message", "unknown"))
         return body
 
     async def _get_multi(
@@ -68,9 +79,7 @@ class NavidromeClient:
         body = r.json().get("subsonic-response", {})
         if body.get("status") != "ok":
             err = body.get("error", {})
-            raise ValueError(
-                f"Subsonic error {err.get('code', '?')}: {err.get('message', 'unknown')}"
-            )
+            raise SubsonicError(err.get("code", "?"), err.get("message", "unknown"))
         return body
 
     async def test_connection(self) -> dict:
@@ -183,6 +192,49 @@ class NavidromeClient:
             await self._get(
                 "createPlaylist", {"playlistId": playlist_id, "name": name}
             )
+
+    async def find_playlist_id(self, name: str) -> Optional[str]:
+        """Id of the caller's playlist with this exact name, or None."""
+        data = await self._get("getPlaylists")
+        for pl in (data.get("playlists") or {}).get("playlist") or []:
+            if pl.get("name") == name:
+                return str(pl["id"])
+        return None
+
+    async def upsert_playlist(
+        self, playlist_id: Optional[str], name: str, song_ids: List[str]
+    ) -> str:
+        """Update the playlist we remember, or recover if it no longer exists.
+
+        A stored id can stop resolving without anything on our side changing:
+        the user deletes the playlist in Navidrome, or Navidrome rewrites its
+        ids (0.64.0 migrated every id to a new canonical format). Subsonic
+        answers both with error 70. Treating that as fatal would leave the
+        playlist failing on every scheduled sync with no way back, so on a 70
+        we re-resolve by name and fall back to creating it. Returns the id that
+        is now live, which the caller must persist.
+        """
+        if playlist_id:
+            try:
+                await self.update_playlist(playlist_id, name, song_ids)
+                return playlist_id
+            except SubsonicError as e:
+                if e.code != _NOT_FOUND:
+                    raise
+                not_found = e
+            found = await self.find_playlist_id(name)
+            if found == playlist_id:
+                # The playlist is there, so the 70 was about something else
+                # (a song id, most likely). Recreating would only duplicate it.
+                raise not_found
+            logger.warning(
+                "Navidrome playlist %r (id %s) no longer exists; re-resolving by name",
+                name, playlist_id,
+            )
+            if found:
+                await self.update_playlist(found, name, song_ids)
+                return found
+        return await self.create_playlist(name, song_ids)
 
     async def delete_playlist(self, playlist_id: str) -> None:
         await self._get("deletePlaylist", {"id": playlist_id})

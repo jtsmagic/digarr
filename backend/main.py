@@ -2287,8 +2287,9 @@ async def _do_refresh_playlist_inner(playlist_id: int) -> dict:
             current_matched = pl.get("navidrome_matched_count") or 0
             if tracks_changed or len(matched_ids) > current_matched:
                 nd_name = _navidrome_playlist_name(pl["name"], config)
-                await nd.update_playlist(pl["navidrome_playlist_id"], nd_name, matched_ids)
-                update_playlist_navidrome_result(playlist_id, pl["navidrome_playlist_id"], len(matched_ids), total)
+                # upsert, not update: the stored id can go stale (see NavidromeClient.upsert_playlist)
+                nd_id = await nd.upsert_playlist(pl["navidrome_playlist_id"], nd_name, matched_ids)
+                update_playlist_navidrome_result(playlist_id, nd_id, len(matched_ids), total)
                 navidrome_sync_result = {"matched": len(matched_ids), "total": total}
         except Exception as e:
             logger.error("Auto Navidrome sync failed for playlist %s: %s", playlist_id, e)
@@ -2993,8 +2994,8 @@ async def _do_sync_navidrome_playlist(pl: dict, nd: NavidromeClient, config: dic
     total = len(tracks)
     nd_name = _navidrome_playlist_name(pl["name"], config)
     if pl.get("navidrome_playlist_id"):
-        await nd.update_playlist(pl["navidrome_playlist_id"], nd_name, matched_ids)
-        navidrome_playlist_id = pl["navidrome_playlist_id"]
+        # upsert, not update: the stored id can go stale (see NavidromeClient.upsert_playlist)
+        navidrome_playlist_id = await nd.upsert_playlist(pl["navidrome_playlist_id"], nd_name, matched_ids)
     else:
         # Created even when nothing matched. The Navidrome playlist id is what
         # enrols a playlist in the scheduled sync - both sync-all paths select on
